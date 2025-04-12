@@ -1,6 +1,8 @@
 package sl
 
-import "log/slog"
+import (
+	"log/slog"
+)
 
 // custom helper function for putting erros inside logs
 func Err(err error) slog.Attr {

@@ -9,6 +9,7 @@ import (
 	"sso/internal/domain/models"
 	"sso/internal/lib/jwt"
 	"sso/internal/lib/logger/sl"
+	"sso/internal/storage"
 	"time"
 )
 
@@ -98,7 +99,7 @@ func (a *Auth) Login(
 		slog.String("op", op),
 		slog.String("username", email),
 	)
-  
+
 	log.Info("attempting to login user")
 
 	user, err := a.usrProvider.User(ctx, email)

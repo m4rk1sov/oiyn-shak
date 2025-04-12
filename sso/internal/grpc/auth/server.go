@@ -3,6 +3,9 @@ package auth
 import (
 	"context"
 	"errors"
+	"sso/internal/services/auth"
+	"sso/internal/storage"
+
 	// codes for grpc clients to understand
 	"google.golang.org/grpc/codes"
 	// status of errors for understanding of grpc clients
@@ -56,7 +59,7 @@ func (s *serverAPI) Login(
 
 	token, err := s.auth.Login(ctx, in.GetEmail(), in.GetPassword(), int(in.GetAppId()))
 	if err != nil {
-		if errors.Is(err, auth.InvalidCredentials) {
+		if errors.Is(err, auth.ErrInvalidCredentials) {
 			return nil, status.Error(codes.InvalidArgument, "invalid email or password")
 		}
 

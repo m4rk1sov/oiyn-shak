@@ -1,9 +1,14 @@
 package main
 
 import (
+	"fmt"
+	"github.com/joho/godotenv"
 	"log/slog"
 	"os"
+	"os/signal"
+	"sso/internal/app"
 	"sso/internal/config"
+	"syscall"
 )
 
 const (
@@ -13,17 +18,35 @@ const (
 )
 
 func main() {
+	err := godotenv.Load(".env")
+	if err != nil {
+		fmt.Println("Error loading .env file")
+	}
 	cfg := config.MustLoad()
 
+	// Initialize logger
 	log := setupLogger(cfg.Env)
 
-	// TODO: initialize config objects
+	// Initialize app
+	application := app.New(log, cfg.GRPC.Port, cfg.DSN, cfg.TokenTTL)
 
-	// TODO: initialize logger
+	// Launch gRPC
+	go func() {
+		application.GRPCServer.MustRun()
+	}()
 
-	// TODO: initialize app
+	// Graceful shutdown
+	// channel for signal info
+	stop := make(chan os.Signal, 1)
+	// Listening the signals
+	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
 
-	// TODO: launch gRPC
+	// waiting the data from channel (pkill -2 or SIGTERM)
+	<-stop
+
+	// initiate graceful shutdown
+	application.Stop()
+	log.Info("Gracefully stopped")
 }
 
 func setupLogger(env string) *slog.Logger {
@@ -40,7 +63,7 @@ func setupLogger(env string) *slog.Logger {
 		)
 	case envProd:
 		log = slog.New(
-			slog.NewJSONHandler(os.Stdout, &slog.HandlerOption{Level: slog.LevelInfo}),
+			slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}),
 		)
 	}
 
