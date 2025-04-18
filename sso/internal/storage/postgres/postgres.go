@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"log/slog"
 	"sso/internal/domain/models"
@@ -86,8 +87,8 @@ func (s *Storage) SaveUser(ctx context.Context, email string, passwordHash []byt
 
 	query := `INSERT INTO users(email, password_hash) VALUES ($1, $2) RETURNING id`
 
-	var id int64
-	err := s.db.QueryRow(ctx, query, email, passwordHash).Scan(id)
+	var id pgtype.Int8
+	err := s.db.QueryRow(ctx, query, email, passwordHash).Scan(&id)
 
 	if err != nil {
 		var postgresErr *pgconn.PgError
@@ -97,7 +98,7 @@ func (s *Storage) SaveUser(ctx context.Context, email string, passwordHash []byt
 		return 0, fmt.Errorf("%s: %w", op, err)
 	}
 
-	return id, nil
+	return id.Int64, nil
 }
 
 func (s *Storage) User(ctx context.Context, email string) (models.User, error) {

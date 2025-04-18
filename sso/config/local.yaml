@@ -1,5 +1,0 @@
-env: "local" # dev, prod
-token_ttl: 1h
-grpc:
-  port: 44044
-  timeout: 10h #5s in prod

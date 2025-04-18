@@ -20,16 +20,21 @@ type GRPCConfig struct {
 	Timeout time.Duration `yaml:"timeout"`
 }
 
-// Be careful with panics, as we used them only in app launching
+// Be careful with panics, we use them only in app launching
 func MustLoad() *Config {
 	configPath := fetchConfigPath()
 	if configPath == "" {
 		panic("config path is empty!")
 	}
 
+	return MustLoadPath(configPath)
+}
+
+// Separated the functionality across the two functions, this one loads the config
+func MustLoadPath(configPath string) *Config {
 	// check for file existence
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		panic("config file does not exist: " + configPath)
+		panic("config path is empty: " + configPath)
 	}
 
 	var cfg Config
