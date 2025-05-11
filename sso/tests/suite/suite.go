@@ -2,7 +2,7 @@ package suite
 
 import (
 	"context"
-	ssov1 "github.com/m4rk1sov/auth/gen/go/sso"
+	ssov1 "github.com/m4rk1sov/protos/gen/go/sso"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"net"

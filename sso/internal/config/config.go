@@ -8,11 +8,12 @@ import (
 )
 
 type Config struct {
-	Env            string     `json:"env" yaml:"env" env-default:"local"`
-	DSN            string     `env:"DSN_STRING"`
-	GRPC           GRPCConfig `yaml:"grpc"`
-	MigrationsPath string
-	TokenTTL       time.Duration `yaml:"token_ttl" env-default:"1h"`
+	Env            string        `json:"env" yaml:"env" env-default:"local"`
+	DSN            string        `env:"DSN_STRING"`
+	GRPC           GRPCConfig    `yaml:"grpc"`
+	MigrationsPath string        `env:"MIGRATE_PATH"`
+	TokenTTL       time.Duration `yaml:"token_ttl"`
+	RefreshTTL     time.Duration `yaml:"refresh_ttl"`
 }
 
 type GRPCConfig struct {

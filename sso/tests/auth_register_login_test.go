@@ -3,7 +3,7 @@ package tests
 import (
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/golang-jwt/jwt/v5"
-	ssov1 "github.com/m4rk1sov/auth/gen/go/sso"
+	ssov1 "github.com/m4rk1sov/protos/gen/go/sso"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"sso/tests/suite"
@@ -44,7 +44,7 @@ func TestRegisterLogin_Login_HappyPath(t *testing.T) {
 
 	require.NoError(t, err)
 
-	token := respLogin.GetToken()
+	token := respLogin.GetAccessToken()
 	require.NotEmpty(t, token) // checking whether it is empty or not
 
 	// marking the time for TTL of token
@@ -63,7 +63,7 @@ func TestRegisterLogin_Login_HappyPath(t *testing.T) {
 	require.True(t, ok)
 
 	// checking the insides of token
-	assert.Equal(t, respReg.GetUserId(), int64(claims["uid"].(float64)))
+	assert.Equal(t, respReg.GetUserId(), int64(claims["user_id"].(float64)))
 	assert.Equal(t, email, claims["email"].(string))
 	assert.Equal(t, appID, int(claims["app_id"].(float64)))
 

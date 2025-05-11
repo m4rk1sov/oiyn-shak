@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	ErrInvalidCredentials = errors.New("Invalid credentials")
+	ErrInvalidCredentials = errors.New("invalid credentials")
 )
 
 type UserSaver interface {
@@ -39,6 +39,7 @@ type Auth struct {
 	usrProvider UserProvider
 	appProvider AppProvider
 	tokenTTL    time.Duration
+	refreshTTL  time.Duration
 }
 
 func New(
@@ -47,6 +48,7 @@ func New(
 	userProvider UserProvider,
 	appProvider AppProvider,
 	tokenTTL time.Duration,
+	refreshTTL time.Duration,
 ) *Auth {
 	return &Auth{
 		log:         log,
@@ -54,6 +56,7 @@ func New(
 		usrProvider: userProvider,
 		appProvider: appProvider,
 		tokenTTL:    tokenTTL,
+		refreshTTL:  refreshTTL,
 	}
 }
 
@@ -92,7 +95,7 @@ func (a *Auth) Login(
 	email string,
 	password string,
 	appID int,
-) (string, error) {
+) (string, string, int64, error) {
 	const op = "Auth.Login"
 
 	log := a.log.With(
@@ -107,34 +110,54 @@ func (a *Auth) Login(
 		if errors.Is(err, storage.ErrUserNotFound) {
 			a.log.Warn("user not found", sl.Err(err))
 
-			return "", fmt.Errorf("%s: %w", op, ErrInvalidCredentials)
+			return "", "", 0, fmt.Errorf("%s: %w", op, ErrInvalidCredentials)
 		}
 
 		a.log.Error("failed to get user", sl.Err(err))
 
-		return "", fmt.Errorf("%s: %w", op, err)
+		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
 
 	if err := bcrypt.CompareHashAndPassword(user.PasswordHash, []byte(password)); err != nil {
 		a.log.Info("invalid credentials", sl.Err(err))
 
-		return "", fmt.Errorf("%s: %w", op, ErrInvalidCredentials)
+		return "", "", 0, fmt.Errorf("%s: %w", op, ErrInvalidCredentials)
 	}
 
 	// info about app
 	app, err := a.appProvider.App(ctx, appID)
 	if err != nil {
-		return "", fmt.Errorf("%s: %w", op, err)
+		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
 
 	log.Info("user logged in successfully")
 
 	token, err := jwt.NewToken(user, app, a.tokenTTL)
+	refresh, err := jwt.NewRefreshToken(user, app, a.refreshTTL)
 	if err != nil {
 		a.log.Error("failed to generate token", sl.Err(err))
 
-		return "", fmt.Errorf("%s: %w", op, err)
+		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
+	expiresAt := time.Now().Add(a.tokenTTL).Unix()
 
-	return token, nil
+	return token, refresh, expiresAt, nil
+}
+
+func (a *Auth) Logout(ctx context.Context, token string) (success bool, err error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (a *Auth) GetUserInfo(ctx context.Context, token string) (userId int64, email string, err error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (a *Auth) RefreshToken(ctx context.Context, refresh string) (string, string, int64, error) {
+	//TODO implement me
+	panic("implement me")
+
+	//const op = "Auth.RefreshTokens"
+	//claims, err := jwt.ValidateRefreshToken(refresh, secret)
 }

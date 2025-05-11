@@ -7,10 +7,14 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/recovery"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"log/slog"
 	"net"
 	authgrpc "sso/internal/grpc/auth"
+	"sso/internal/lib/jwt"
+	"sso/internal/services/permission"
+	"strings"
 )
 
 type App struct {
@@ -26,9 +30,52 @@ func InterceptorLogger(l *slog.Logger) logging.Logger {
 	})
 }
 
+func InterceptorPermission(secret string, pp permission.PermProvider, permission string) grpc.UnaryServerInterceptor {
+	return func(
+		ctx context.Context,
+		req interface{},
+		info *grpc.UnaryServerInfo,
+		handler grpc.UnaryHandler,
+	) (interface{}, error) {
+		// extracting the metadata from token (HTTP-like)
+		md, ok := metadata.FromIncomingContext(ctx)
+		if !ok {
+			return nil, status.Error(codes.Unauthenticated, "missing metadata")
+		}
+
+		// Getting the token from header
+		authHeader := md.Get("authorization")
+		if len(authHeader) == 0 {
+			return nil, status.Error(codes.Unauthenticated, "missing token")
+		}
+		tokenString := strings.TrimPrefix(authHeader[0], "Bearer ")
+
+		claims, err := jwt.ValidateToken(tokenString, secret)
+		if err != nil {
+			return nil, status.Error(codes.Unauthenticated, "invalid token")
+		}
+
+		userID, ok := claims["user_id"].(float64)
+		if !ok {
+			return nil, status.Error(codes.InvalidArgument, "invalid user id")
+		}
+
+		allowed, err := pp.HasUserPermission(ctx, int64(userID), permission)
+		if err != nil {
+			return nil, status.Error(codes.Internal, "permission lookup failed")
+		}
+
+		if allowed {
+			return handler(ctx, req)
+		}
+		return nil, status.Error(codes.PermissionDenied, "missing required permission")
+	}
+}
+
 func New(
 	log *slog.Logger,
 	authService authgrpc.Auth,
+	permissionService authgrpc.Permission,
 	port int,
 ) *App {
 	loggingOpts := []logging.Option{
@@ -51,7 +98,7 @@ func New(
 	))
 
 	// register the service Auth
-	authgrpc.Register(gRPCServer, authService)
+	authgrpc.Register(gRPCServer, authService, permissionService)
 
 	// return App object with necessary fields
 	return &App{

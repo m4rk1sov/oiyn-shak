@@ -4,7 +4,7 @@ import (
 	"log/slog"
 )
 
-// custom helper function for putting erros inside logs
+// Err - custom helper function for putting errors inside logs
 func Err(err error) slog.Attr {
 	return slog.Attr{
 		Key:   "error",

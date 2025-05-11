@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	grpcapp "sso/internal/app/grpc"
 	"sso/internal/services/auth"
+	"sso/internal/services/permission"
 	"sso/internal/storage/postgres"
 	"time"
 )
@@ -18,15 +19,17 @@ func New(
 	grpcPort int,
 	dsn string,
 	tokenTTL time.Duration,
+	refreshTTL time.Duration,
 ) *App {
 	storage, err := postgres.New(dsn)
 	if err != nil {
 		panic(err)
 	}
 
-	authService := auth.New(log, storage, storage, storage, tokenTTL)
+	authService := auth.New(log, storage, storage, storage, tokenTTL, refreshTTL)
+	permissionService := permission.New(log, storage)
 
-	grpcApp := grpcapp.New(log, authService, grpcPort)
+	grpcApp := grpcapp.New(log, authService, permissionService, grpcPort)
 
 	return &App{
 		GRPCServer: grpcApp,

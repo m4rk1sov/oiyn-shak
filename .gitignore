@@ -24,10 +24,5 @@ go.work.sum
 # env file
 *.env
 
-# yaml file
-*.yaml
-
-*./config/
-
-# sum file
-*.sum
+*.idea/
+.vscode/

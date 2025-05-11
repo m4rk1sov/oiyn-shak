@@ -135,3 +135,67 @@ func (s *Storage) App(ctx context.Context, id int) (models.App, error) {
 
 	return app, nil
 }
+
+func (s *Storage) GetUserPermissions(ctx context.Context, id int64) ([]string, error) {
+	const op = "storage.postgres.GetUserPermissions"
+
+	query := `
+	SELECT permissions.code FROM permissions 
+    INNER JOIN users_permissions ON users_permissions.permission_id = permissions.id 
+    INNER JOIN users ON users_permissions.user_id = users.id 
+    WHERE users.id = $1`
+
+	rows, err := s.db.Query(ctx, query, id)
+
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var permissions []string
+
+	for rows.Next() {
+		var permission string
+
+		err := rows.Scan(&permission)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, fmt.Errorf("%s: %w", op, storage.ErrPermissionNotFound)
+			}
+
+			return nil, fmt.Errorf("%s: %w", op, err)
+		}
+
+		permissions = append(permissions, permission)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return permissions, nil
+}
+
+func (s *Storage) HasUserPermission(ctx context.Context, id int64, permission string) (bool, error) {
+	const op = "storage.postgres.HasUserPermission"
+
+	query := `
+	SELECT EXISTS ( 
+	SELECT 1 FROM users_permissions 
+    JOIN permissions ON users_permissions.permission_id = permissions.id
+	WHERE users_permissions.user_id = $1 AND permissions.code = $2 
+	)`
+
+	var allowed bool
+
+	err := s.db.QueryRow(ctx, query, id, permission).Scan(&allowed)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, fmt.Errorf("%s: %w", op, storage.ErrPermissionNotFound)
+		}
+
+		return false, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return allowed, nil
+}
