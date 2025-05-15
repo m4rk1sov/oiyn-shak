@@ -136,6 +136,58 @@ func (s *Storage) App(ctx context.Context, id int) (models.App, error) {
 	return app, nil
 }
 
+func (s *Storage) Save(ctx context.Context, token string, userID int64, appID int, expiresAt time.Time) error {
+	const op = "storage.postgres.SaveRefresh"
+
+	query := `
+	INSERT INTO refresh_tokens (token, user_id, app_id, expires_at) 
+	VALUES ($1, $2, $3, $4) 
+	ON CONFLICT (token) DO NOTHING`
+
+	_, err := s.db.Exec(ctx, query, token, userID, appID, expiresAt)
+	if err != nil {
+		var postgresErr *pgconn.PgError
+		if errors.As(err, &postgresErr) && postgresErr.Code == "23505" {
+			return fmt.Errorf("%s: %w", op, storage.ErrTokenExists)
+		}
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return err
+}
+
+func (s *Storage) DeleteRefresh(ctx context.Context, token string) error {
+	const op = "storage.postgres.DeleteRefresh"
+
+	query := `DELETE FROM refresh_tokens WHERE token = $1`
+
+	cmd, err := s.db.Exec(ctx, query, token)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if cmd.RowsAffected() == 0 {
+		return storage.ErrRefreshTokenNotFound
+	}
+
+	return nil
+}
+
+func (s *Storage) Exists(ctx context.Context, token string) (bool, error) {
+	const op = "storage.postgres.Exists"
+
+	query := `SELECT 1 FROM refresh_tokens WHERE token = $1 AND expires_at > now() LIMIT 1`
+
+	row := s.db.QueryRow(ctx, query, token)
+
+	var dummy int
+	err := row.Scan(&dummy)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", op, err)
+	}
+	return true, nil
+}
+
 func (s *Storage) GetUserPermissions(ctx context.Context, id int64) ([]string, error) {
 	const op = "storage.postgres.GetUserPermissions"
 

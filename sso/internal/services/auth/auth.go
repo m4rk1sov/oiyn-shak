@@ -25,6 +25,12 @@ type UserSaver interface {
 	) (uid int64, err error)
 }
 
+type RefreshSaver interface {
+	Save(ctx context.Context, refresh string, userID int64, appID int, expiresAt time.Time) error
+	Delete(ctx context.Context, token string) error
+	Exists(ctx context.Context, token string) (bool, error)
+}
+
 type UserProvider interface {
 	User(ctx context.Context, email string) (models.User, error)
 }
@@ -34,29 +40,32 @@ type AppProvider interface {
 }
 
 type Auth struct {
-	log         *slog.Logger
-	usrSaver    UserSaver
-	usrProvider UserProvider
-	appProvider AppProvider
-	tokenTTL    time.Duration
-	refreshTTL  time.Duration
+	log          *slog.Logger
+	usrSaver     UserSaver
+	refreshSaver RefreshSaver
+	usrProvider  UserProvider
+	appProvider  AppProvider
+	tokenTTL     time.Duration
+	refreshTTL   time.Duration
 }
 
 func New(
 	log *slog.Logger,
 	userSaver UserSaver,
+	refreshSaver RefreshSaver,
 	userProvider UserProvider,
 	appProvider AppProvider,
 	tokenTTL time.Duration,
 	refreshTTL time.Duration,
 ) *Auth {
 	return &Auth{
-		log:         log,
-		usrSaver:    userSaver,
-		usrProvider: userProvider,
-		appProvider: appProvider,
-		tokenTTL:    tokenTTL,
-		refreshTTL:  refreshTTL,
+		log:          log,
+		usrSaver:     userSaver,
+		refreshSaver: refreshSaver,
+		usrProvider:  userProvider,
+		appProvider:  appProvider,
+		tokenTTL:     tokenTTL,
+		refreshTTL:   refreshTTL,
 	}
 }
 
@@ -144,20 +153,89 @@ func (a *Auth) Login(
 	return token, refresh, expiresAt, nil
 }
 
-func (a *Auth) Logout(ctx context.Context, token string) (success bool, err error) {
-	//TODO implement me
-	panic("implement me")
+func (a *Auth) Logout(ctx context.Context, token string) (bool, error) {
+	const op = "Auth.Logout"
+
+	err := a.refreshSaver.Delete(ctx, token)
+	if err != nil {
+		a.log.Error("failed to delete refresh token", slog.String("op", op), sl.Err(err))
+		return false, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return true, nil
 }
 
-func (a *Auth) GetUserInfo(ctx context.Context, token string) (userId int64, email string, err error) {
-	//TODO implement me
-	panic("implement me")
+func (a *Auth) GetUserInfo(ctx context.Context, token string) (int64, string, error) {
+	const op = "Auth.GetUserInfo"
+
+	claims, err := jwt.ValidateToken(token, "")
+	if err != nil {
+		a.log.Error("invalid token", slog.String("op", op), sl.Err(err))
+		return 0, "", fmt.Errorf("%s: %w", op, err)
+	}
+
+	userID, ok := claims["user_id"].(float64)
+	if !ok {
+		return 0, "", fmt.Errorf("%s: user_id not found in token", op)
+	}
+
+	email, ok := claims["email"].(string)
+	if !ok {
+		return 0, "", fmt.Errorf("%s: email not found in token", op)
+	}
+
+	return int64(userID), email, nil
 }
 
 func (a *Auth) RefreshToken(ctx context.Context, refresh string) (string, string, int64, error) {
-	//TODO implement me
-	panic("implement me")
+	const op = "Auth.RefreshTokens"
 
-	//const op = "Auth.RefreshTokens"
-	//claims, err := jwt.ValidateRefreshToken(refresh, secret)
+	claims, err := jwt.ValidateRefreshToken(refresh, "")
+	if err != nil {
+		a.log.Error("invalid refresh token", slog.String("op", op), sl.Err(err))
+	}
+
+	_, ok := claims["user_id"].(float64)
+	if !ok {
+		return "", "", 0, fmt.Errorf("%s: missing user_id", op)
+	}
+
+	appID, ok := claims["app_id"].(float64)
+	if !ok {
+		return "", "", 0, fmt.Errorf("%s: missing app_id", op)
+	}
+
+	user, err := a.usrProvider.User(ctx, claims["email"].(string))
+	if err != nil {
+		return "", "", 0, fmt.Errorf("%s: %w", op, err)
+	}
+
+	app, err := a.appProvider.App(ctx, int(appID))
+	if err != nil {
+		return "", "", 0, fmt.Errorf("%s: %w", op, err)
+	}
+
+	newToken, err := jwt.NewToken(user, app, a.tokenTTL)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("%s: %w", op, err)
+	}
+
+	newRefresh, err := jwt.NewRefreshToken(user, app, a.refreshTTL)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("%s: %w", op, err)
+	}
+
+	expiresAt := time.Now().Add(a.tokenTTL).Unix()
+
+	err = a.refreshSaver.Save(ctx, refresh, user.ID, app.ID, time.Now().Add(a.refreshTTL))
+	if err != nil {
+		return "", "", 0, fmt.Errorf("%s: %w", op, err)
+	}
+
+	exists, err := a.refreshSaver.Exists(ctx, refresh)
+	if err != nil || !exists {
+		return "", "", 0, fmt.Errorf("%s: invalid refresh token", op)
+	}
+
+	return newToken, newRefresh, expiresAt, nil
 }
