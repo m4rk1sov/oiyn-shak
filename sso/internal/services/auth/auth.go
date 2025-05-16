@@ -23,12 +23,13 @@ type UserSaver interface {
 		email string,
 		passwordHash []byte,
 	) (uid int64, err error)
+	AddUserPermission(ctx context.Context, userID int64, permissionID int64) error
 }
 
 type RefreshSaver interface {
-	Save(ctx context.Context, refresh string, userID int64, appID int, expiresAt time.Time) error
-	Delete(ctx context.Context, token string) error
-	Exists(ctx context.Context, token string) (bool, error)
+	SaveRefresh(ctx context.Context, refresh string, userID int64, appID int, expiresAt time.Time) error
+	DeleteRefresh(ctx context.Context, token string) error
+	ExistsRefresh(ctx context.Context, token string) (bool, error)
 }
 
 type UserProvider interface {
@@ -96,6 +97,12 @@ func (a *Auth) RegisterNewUser(ctx context.Context, email string, password strin
 		return 0, fmt.Errorf("%s: %w", op, err)
 	}
 
+	if err := a.usrSaver.AddUserPermission(ctx, id, 1); err != nil {
+		log.Error("failed to assign user permission", sl.Err(err))
+
+		return 0, fmt.Errorf("%s: %w", op, err)
+	}
+
 	return id, nil
 }
 
@@ -156,7 +163,7 @@ func (a *Auth) Login(
 func (a *Auth) Logout(ctx context.Context, token string) (bool, error) {
 	const op = "Auth.Logout"
 
-	err := a.refreshSaver.Delete(ctx, token)
+	err := a.refreshSaver.DeleteRefresh(ctx, token)
 	if err != nil {
 		a.log.Error("failed to delete refresh token", slog.String("op", op), sl.Err(err))
 		return false, fmt.Errorf("%s: %w", op, err)
@@ -227,12 +234,12 @@ func (a *Auth) RefreshToken(ctx context.Context, refresh string) (string, string
 
 	expiresAt := time.Now().Add(a.tokenTTL).Unix()
 
-	err = a.refreshSaver.Save(ctx, refresh, user.ID, app.ID, time.Now().Add(a.refreshTTL))
+	err = a.refreshSaver.SaveRefresh(ctx, refresh, user.ID, app.ID, time.Now().Add(a.refreshTTL))
 	if err != nil {
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
 
-	exists, err := a.refreshSaver.Exists(ctx, refresh)
+	exists, err := a.refreshSaver.ExistsRefresh(ctx, refresh)
 	if err != nil || !exists {
 		return "", "", 0, fmt.Errorf("%s: invalid refresh token", op)
 	}

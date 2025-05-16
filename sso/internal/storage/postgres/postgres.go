@@ -136,7 +136,7 @@ func (s *Storage) App(ctx context.Context, id int) (models.App, error) {
 	return app, nil
 }
 
-func (s *Storage) Save(ctx context.Context, token string, userID int64, appID int, expiresAt time.Time) error {
+func (s *Storage) SaveRefresh(ctx context.Context, token string, userID int64, appID int, expiresAt time.Time) error {
 	const op = "storage.postgres.SaveRefresh"
 
 	query := `
@@ -173,8 +173,8 @@ func (s *Storage) DeleteRefresh(ctx context.Context, token string) error {
 	return nil
 }
 
-func (s *Storage) Exists(ctx context.Context, token string) (bool, error) {
-	const op = "storage.postgres.Exists"
+func (s *Storage) ExistsRefresh(ctx context.Context, token string) (bool, error) {
+	const op = "storage.postgres.ExistsRefresh"
 
 	query := `SELECT 1 FROM refresh_tokens WHERE token = $1 AND expires_at > now() LIMIT 1`
 
@@ -250,4 +250,19 @@ func (s *Storage) HasUserPermission(ctx context.Context, id int64, permission st
 	}
 
 	return allowed, nil
+}
+
+func (s *Storage) AddUserPermission(ctx context.Context, userID int64, permissionID int64) error {
+	const op = "storage.postgres.AddUserPermission"
+
+	query := `
+		INSERT INTO users_permissions(user_id, permission_id) 
+		VALUES ($1, $2) ON CONFLICT DO NOTHING `
+
+	_, err := s.db.Exec(ctx, query, userID, permissionID)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return err
 }

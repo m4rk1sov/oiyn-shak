@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/golang-jwt/jwt/v5"
-	"os"
 	"sso/internal/domain/models"
 	"time"
 )
@@ -13,8 +12,8 @@ var (
 	ErrTokenInvalid    = errors.New("token is invalid")
 	ErrClaimsInvalid   = errors.New("claims are invalid")
 	ErrNotRefreshToken = errors.New("token is not refresh")
-	ErrTokenMalformed  = errors.New("token is malformed")
-	jwtSecretKey       = []byte(os.Getenv("SECRET_KEY")) // Secure this properly
+	//ErrTokenMalformed  = errors.New("token is malformed")
+	//jwtSecretKey       = []byte(os.Getenv("SECRET_KEY")) // Secure this properly
 )
 
 // creates new JWT token for user and app
