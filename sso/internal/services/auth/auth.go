@@ -11,6 +11,7 @@ import (
 	"sso/internal/lib/jwt"
 	"sso/internal/lib/logger/sl"
 	"sso/internal/storage"
+	"sso/internal/validator"
 	"time"
 )
 
@@ -82,6 +83,13 @@ func (a *Auth) RegisterNewUser(ctx context.Context, email string, password strin
 	)
 
 	log.Info("registering user")
+
+	v := validator.New()
+	validator.ValidateUserInput(v, email, password)
+	if !v.Valid() {
+		log.Error("invalid user input", slog.Any("errors", v.Errors))
+		return 0, fmt.Errorf("%s: validation error: %v", op, v.Errors)
+	}
 
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), 14)
 	if err != nil {

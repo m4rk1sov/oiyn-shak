@@ -27,6 +27,7 @@ type config struct {
 }
 
 func main() {
+	// go run ./cmd/migrator --cmd up
 	err := godotenv.Load(".env")
 	if err != nil {
 		log.Println("Error loading .env file")

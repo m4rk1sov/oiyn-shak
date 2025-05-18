@@ -3,7 +3,7 @@ package grpcapp
 import (
 	"context"
 	"fmt"
-	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/logging"
+	//"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/logging"
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/recovery"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -23,11 +23,32 @@ type App struct {
 	port       int
 }
 
-// Adapter for slog to interceptor logger
-func InterceptorLogger(l *slog.Logger) logging.Logger {
-	return logging.LoggerFunc(func(ctx context.Context, lvl logging.Level, msg string, field ...any) {
-		l.Log(ctx, slog.Level(lvl), msg, field...)
-	})
+var sensitiveMethods = map[string]bool{
+	"/sso.Auth/Login":    true,
+	"/sso.Auth/Register": true,
+}
+
+func InterceptorLogging(log *slog.Logger) grpc.UnaryServerInterceptor {
+	return func(
+		ctx context.Context,
+		req interface{},
+		info *grpc.UnaryServerInfo,
+		handler grpc.UnaryHandler,
+	) (resp interface{}, err error) {
+		// Skip logging for sensitive methods
+		if sensitiveMethods[info.FullMethod] {
+			return handler(ctx, req)
+		}
+
+		log.Info("gRPC request", slog.String("method", info.FullMethod))
+		resp, err = handler(ctx, req)
+		if err != nil {
+			log.Error("gRPC error", slog.String("method", info.FullMethod), slog.String("error", err.Error()))
+		} else {
+			log.Info("gRPC response", slog.String("method", info.FullMethod))
+		}
+		return resp, err
+	}
 }
 
 func InterceptorPermission(secret string, pp permission.PermProvider, permission string) grpc.UnaryServerInterceptor {
@@ -78,12 +99,6 @@ func New(
 	permissionService authgrpc.Permission,
 	port int,
 ) *App {
-	loggingOpts := []logging.Option{
-		logging.WithLogOnEvents(
-			logging.PayloadReceived, logging.PayloadSent,
-		),
-	}
-
 	// gRPCServer and connect interceptors
 	recoveryOpts := []recovery.Option{
 		recovery.WithRecoveryHandler(func(p interface{}) (err error) {
@@ -94,7 +109,8 @@ func New(
 
 	gRPCServer := grpc.NewServer(grpc.ChainUnaryInterceptor(
 		recovery.UnaryServerInterceptor(recoveryOpts...),
-		logging.UnaryServerInterceptor(InterceptorLogger(log), loggingOpts...),
+		//logging.UnaryServerInterceptor(InterceptorLogger(log), loggingOpts...),
+		InterceptorLogging(log),
 	))
 
 	// register the service Auth
