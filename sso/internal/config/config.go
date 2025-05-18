@@ -8,12 +8,16 @@ import (
 )
 
 type Config struct {
-	Env            string        `json:"env" yaml:"env" env-default:"local"`
-	DSN            string        `env:"DSN_STRING"`
-	GRPC           GRPCConfig    `yaml:"grpc"`
-	MigrationsPath string        `env:"MIGRATE_PATH"`
-	TokenTTL       time.Duration `yaml:"token_ttl"`
-	RefreshTTL     time.Duration `yaml:"refresh_ttl"`
+	Env            string     `json:"env" yaml:"env" env-default:"local"`
+	DSN            string     `env:"DSN_STRING"`
+	JWT            JWTConfig  `yaml:"jwt"`
+	GRPC           GRPCConfig `yaml:"grpc"`
+	MigrationsPath string     `env:"MIGRATE_PATH"`
+}
+
+type JWTConfig struct {
+	TokenTTL   time.Duration `yaml:"token_ttl" env-default:"1h"`
+	RefreshTTL time.Duration `yaml:"refresh_ttl" env-default:"240h"`
 }
 
 type GRPCConfig struct {

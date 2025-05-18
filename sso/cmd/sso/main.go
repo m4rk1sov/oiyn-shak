@@ -28,7 +28,7 @@ func main() {
 	log := setupLogger(cfg.Env)
 
 	// Initialize app
-	application := app.New(log, cfg.GRPC.Port, cfg.DSN, cfg.TokenTTL, cfg.RefreshTTL)
+	application := app.New(log, cfg.GRPC.Port, cfg.DSN, cfg.JWT.TokenTTL, cfg.JWT.RefreshTTL)
 
 	// Launch gRPC
 	go func() {

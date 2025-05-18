@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	ErrTokenInvalid    = errors.New("token is invalid")
+	//ErrTokenInvalid    = errors.New("token is invalid")
 	ErrClaimsInvalid   = errors.New("claims are invalid")
 	ErrNotRefreshToken = errors.New("token is not refresh")
 	//ErrTokenMalformed  = errors.New("token is malformed")
@@ -62,11 +62,11 @@ func ValidateToken(tokenString string, secret string) (jwt.MapClaims, error) {
 		return []byte(secret), nil
 	})
 	if err != nil || !token.Valid {
-		return nil, ErrTokenInvalid
+		return nil, err
 	}
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		return nil, ErrClaimsInvalid
+		return nil, err
 	}
 
 	return claims, nil
@@ -83,4 +83,17 @@ func ValidateRefreshToken(refreshString string, secret string) (jwt.MapClaims, e
 	}
 
 	return claims, nil
+}
+
+func DecodeWithoutValidation(tokenString string) (jwt.MapClaims, error) {
+	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
+	token, _, err := parser.ParseUnverified(tokenString, jwt.MapClaims{})
+	if err != nil {
+		return nil, err
+	}
+
+	if claims, ok := token.Claims.(jwt.MapClaims); ok {
+		return claims, nil
+	}
+	return nil, ErrClaimsInvalid
 }

@@ -2,6 +2,6 @@ package models
 
 type App struct {
 	ID     int
-	Email  string
+	Name   string
 	Secret string
 }

@@ -124,7 +124,7 @@ func (s *Storage) App(ctx context.Context, id int) (models.App, error) {
 	query := `SELECT id, name, secret FROM apps WHERE id = $1`
 
 	var app models.App
-	err := s.db.QueryRow(ctx, query, id).Scan(&app.ID, &app.Email, &app.Secret)
+	err := s.db.QueryRow(ctx, query, id).Scan(&app.ID, &app.Name, &app.Secret)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return models.App{}, fmt.Errorf("%s: %w", op, storage.ErrAppNotFound)

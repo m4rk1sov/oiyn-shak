@@ -9,9 +9,9 @@ import (
 	"google.golang.org/grpc/codes"
 	// status of errors for understanding of grpc clients
 	"google.golang.org/grpc/status"
-
+	
 	"google.golang.org/grpc"
-
+	
 	ssov1 "github.com/m4rk1sov/protos/gen/go/sso"
 )
 
@@ -40,7 +40,7 @@ type Auth interface {
 		password string,
 	) (userId int64, err error)
 	Logout(ctx context.Context,
-		token string,
+		refresh string,
 	) (success bool, err error)
 	GetUserInfo(
 		ctx context.Context,
@@ -76,24 +76,24 @@ func (s *authServer) Login(
 	if in.Email == "" {
 		return nil, status.Error(codes.InvalidArgument, "email is required")
 	}
-
+	
 	if in.Password == "" {
 		return nil, status.Error(codes.InvalidArgument, "password is required")
 	}
-
+	
 	if in.GetAppId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, "app_id is required")
 	}
-
+	
 	token, refresh, exp, err := s.auth.Login(ctx, in.GetEmail(), in.GetPassword(), int(in.GetAppId()))
 	if err != nil {
 		if errors.Is(err, auth.ErrInvalidCredentials) {
 			return nil, status.Error(codes.InvalidArgument, "invalid email or password")
 		}
-
+		
 		return nil, status.Error(codes.Internal, "failed to login")
 	}
-
+	
 	return &ssov1.LoginResponse{AccessToken: token, RefreshToken: refresh, ExpiresAtUnix: exp}, nil
 }
 
@@ -104,20 +104,20 @@ func (s *authServer) Register(
 	if in.Email == "" {
 		return nil, status.Error(codes.InvalidArgument, "email is required")
 	}
-
+	
 	if in.Password == "" {
 		return nil, status.Error(codes.InvalidArgument, "password is required")
 	}
-
+	
 	userId, err := s.auth.RegisterNewUser(ctx, in.GetEmail(), in.GetPassword())
 	if err != nil {
 		if errors.Is(err, storage.ErrUserExists) {
 			return nil, status.Error(codes.AlreadyExists, "user already exists")
 		}
-
+		
 		return nil, status.Error(codes.Internal, "failed to register user")
 	}
-
+	
 	return &ssov1.RegisterResponse{UserId: userId}, nil
 }
 
@@ -125,19 +125,19 @@ func (s *authServer) Logout(
 	ctx context.Context,
 	in *ssov1.LogoutRequest,
 ) (*ssov1.LogoutResponse, error) {
-	if in.GetAccessToken() == "" {
-		return nil, status.Error(codes.InvalidArgument, "access token is required or invalid")
+	if in.GetRefreshToken() == "" {
+		return nil, status.Error(codes.InvalidArgument, "refresh token is required or invalid")
 	}
-
-	success, err := s.auth.Logout(ctx, in.GetAccessToken())
+	
+	success, err := s.auth.Logout(ctx, in.GetRefreshToken())
 	if err != nil {
 		if errors.Is(err, storage.ErrTokenNotFound) {
-			return nil, status.Error(codes.NotFound, "access token not found")
+			return nil, status.Error(codes.NotFound, "refresh token not found")
 		}
-
+		
 		return nil, status.Error(codes.Internal, "failed to logout")
 	}
-
+	
 	return &ssov1.LogoutResponse{Success: success}, nil
 }
 
@@ -148,16 +148,16 @@ func (s *authServer) GetUserInfo(
 	if in.GetAccessToken() == "" {
 		return nil, status.Error(codes.InvalidArgument, "access token is required or invalid")
 	}
-
+	
 	userID, email, err := s.auth.GetUserInfo(ctx, in.GetAccessToken())
 	if err != nil {
 		if errors.Is(err, storage.ErrTokenNotFound) {
 			return nil, status.Error(codes.NotFound, "access token not found")
 		}
-
+		
 		return nil, status.Error(codes.Internal, "failed to get user info")
 	}
-
+	
 	return &ssov1.GetUserInfoResponse{UserId: userID, Email: email}, nil
 }
 
@@ -168,16 +168,16 @@ func (s *authServer) RefreshToken(
 	if in.GetRefreshToken() == "" {
 		return nil, status.Error(codes.InvalidArgument, "refresh token is required or invalid")
 	}
-
+	
 	token, refresh, exp, err := s.auth.RefreshToken(ctx, in.GetRefreshToken())
 	if err != nil {
 		if errors.Is(err, storage.ErrTokenNotFound) {
 			return nil, status.Error(codes.NotFound, "refresh token is not found")
 		}
-
+		
 		return nil, status.Error(codes.Internal, "failed to retrieve refreshed tokens")
 	}
-
+	
 	return &ssov1.RefreshTokenResponse{
 		AccessToken:   token,
 		RefreshToken:  refresh,
@@ -192,7 +192,7 @@ func (s *permissionServer) GetUserPermissions(
 	if in.UserId == 0 {
 		return nil, status.Error(codes.InvalidArgument, "user_id is required")
 	}
-
+	
 	permissions, err := s.permission.GetUserPermissions(ctx, in.GetUserId())
 	if err != nil {
 		return nil, status.Error(codes.Internal, "failed to get the user permissions")
@@ -207,15 +207,15 @@ func (s *permissionServer) HasUserPermission(
 	if in.UserId == 0 {
 		return nil, status.Error(codes.InvalidArgument, "user_id is required")
 	}
-
+	
 	if in.GetPermission() == "" {
 		return nil, status.Error(codes.InvalidArgument, "permission is required")
 	}
-
+	
 	allowed, err := s.permission.HasUserPermission(ctx, in.GetUserId(), in.GetPermission())
 	if err != nil {
 		return nil, status.Error(codes.Internal, "failed to check user permission")
 	}
-
+	
 	return &ssov1.HasUserPermissionResponse{Allowed: allowed}, nil
 }
