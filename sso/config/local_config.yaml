@@ -5,3 +5,5 @@ jwt:
 grpc:
   port: 44044
   timeout: 10h #5s in prod
+http_server:
+  port: 8080

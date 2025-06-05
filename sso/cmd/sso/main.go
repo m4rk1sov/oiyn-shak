@@ -1,13 +1,16 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"github.com/joho/godotenv"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"sso/internal/app"
 	"sso/internal/config"
+	"sso/internal/lib/logger/sl"
 	"syscall"
 )
 
@@ -28,11 +31,17 @@ func main() {
 	log := setupLogger(cfg.Env)
 
 	// Initialize app
-	application := app.New(log, cfg.GRPC.Port, cfg.DSN, cfg.JWT.TokenTTL, cfg.JWT.RefreshTTL)
+	application := app.New(log, cfg.GRPC.Port, cfg.HTTPServer.Port, cfg.DSN, cfg.JWT.TokenTTL, cfg.JWT.RefreshTTL)
 
 	// Launch gRPC
 	go func() {
 		application.GRPCServer.MustRun()
+		log.Info("gRPC server started")
+
+		log.Info("starting HTTP server", slog.Int("port", cfg.HTTPServer.Port))
+		if err := application.HTTPServer.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("failed to start HTTP server", sl.Err(err))
+		}
 	}()
 
 	// Graceful shutdown

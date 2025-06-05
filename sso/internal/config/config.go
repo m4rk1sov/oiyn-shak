@@ -13,11 +13,16 @@ type Config struct {
 	JWT            JWTConfig  `yaml:"jwt"`
 	GRPC           GRPCConfig `yaml:"grpc"`
 	MigrationsPath string     `env:"MIGRATE_PATH"`
+	HTTPServer     HTTPServer `yaml:"http_server"`
 }
 
 type JWTConfig struct {
 	TokenTTL   time.Duration `yaml:"token_ttl" env-default:"1h"`
 	RefreshTTL time.Duration `yaml:"refresh_ttl" env-default:"240h"`
+}
+
+type HTTPServer struct {
+	Port int `yaml:"port" env:"HTTP_PORT" env-default:"8080"`
 }
 
 type GRPCConfig struct {
