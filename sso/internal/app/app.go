@@ -4,13 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"os/signal"
 	grpcapp "sso/internal/app/grpc"
 	"sso/internal/lib/logger/sl"
 	"sso/internal/services/auth"
 	"sso/internal/services/permission"
 	"sso/internal/storage/postgres"
+	"syscall"
 	"time"
-	
+
 	httpserver "sso/internal/http"
 )
 
@@ -25,7 +28,7 @@ func New(
 	log *slog.Logger,
 	grpcPort int,
 	httpPort int,
-//swaggerSpec []byte,
+	//swaggerSpec []byte,
 	dsn string,
 	tokenTTL time.Duration,
 	refreshTTL time.Duration,
@@ -34,14 +37,14 @@ func New(
 	if err != nil {
 		panic(err)
 	}
-	
+
 	authService := auth.New(log, storage, storage, storage, storage, tokenTTL, refreshTTL)
 	permissionService := permission.New(log, storage)
-	
+
 	grpcApp := grpcapp.New(log, authService, permissionService, grpcPort)
 	grpcAddr := fmt.Sprintf("localhost:%d", grpcPort)
 	httpServer := httpserver.NewServer(grpcAddr, httpPort)
-	
+
 	return &App{
 		GRPCServer: grpcApp,
 		HTTPServer: httpServer,
@@ -50,14 +53,16 @@ func New(
 
 func (a *App) Stop() {
 	const op = "app.Stop"
-	
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	
-	if err := a.HTTPServer.Stop(ctx); err != nil {
-		a.log.Error("failed to stop HTTP server", op, sl.Err(err))
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if a.HTTPServer != nil {
+		if err := a.HTTPServer.Stop(ctx); err != nil {
+			a.log.Error("failed to stop HTTP server", op, sl.Err(err))
+		}
 	}
-	
+
 	if a.GRPCServer != nil {
 		a.GRPCServer.Stop()
 		a.log.Info("stopped gRPC server")

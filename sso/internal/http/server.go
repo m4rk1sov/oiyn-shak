@@ -4,6 +4,7 @@ package http
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	ssov1 "github.com/m4rk1sov/protos/gen/go/sso"
@@ -12,7 +13,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -58,18 +58,19 @@ func (s *Server) Start() error {
 	s.setupSwaggerUI(mainMux)
 
 	// API endpoints
-	mainMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/swagger") {
-			http.NotFound(w, r)
-			return
-		}
-		gwMux.ServeHTTP(w, r)
-	})
+	mainMux.Handle("/", gwMux)
+	//mainMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	//	if strings.HasPrefix(r.URL.Path, "/swagger") {
+	//		http.NotFound(w, r)
+	//		return
+	//	}
+	//	gwMux.ServeHTTP(w, r)
+	//})
 
 	handler := corsMiddleware(mainMux)
 
 	s.httpServer = &http.Server{
-		Addr:         fmt.Sprintf(":%d", s.port),
+		Addr:         fmt.Sprintf("localhost:%d", s.port),
 		Handler:      handler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
@@ -84,7 +85,14 @@ func (s *Server) Start() error {
 	//
 	//<-ctx.Done()
 
-	return s.httpServer.ListenAndServe()
+	go func() {
+		err := s.httpServer.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			panic(fmt.Errorf("failed to start HTTP server: %w", err))
+		}
+	}()
+
+	return err
 }
 
 func (s *Server) Stop(ctx context.Context) error {
@@ -136,7 +144,7 @@ func (s *Server) setupSwaggerUI(mux *http.ServeMux) {
 		//		return
 		//	}
 		//} else {
-		file, err := SwaggerAssets.Open("/swagger/swagger.json")
+		file, err := SwaggerAssets.Open("swagger/swagger.json")
 		if err != nil {
 			http.Error(w, "Swagger spec not found", http.StatusNotFound)
 			return
