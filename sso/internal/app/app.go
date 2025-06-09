@@ -28,7 +28,6 @@ func New(
 	log *slog.Logger,
 	grpcPort int,
 	httpPort int,
-	//swaggerSpec []byte,
 	dsn string,
 	tokenTTL time.Duration,
 	refreshTTL time.Duration,
@@ -42,12 +41,22 @@ func New(
 	permissionService := permission.New(log, storage)
 
 	grpcApp := grpcapp.New(log, authService, permissionService, grpcPort)
+
 	grpcAddr := fmt.Sprintf("localhost:%d", grpcPort)
 	httpServer := httpserver.NewServer(grpcAddr, httpPort)
 
 	return &App{
 		GRPCServer: grpcApp,
 		HTTPServer: httpServer,
+		Storage:    storage,
+		log:        log,
+	}
+}
+
+func (a *App) CloseStorage() {
+	if a.Storage != nil {
+		a.Storage.Close()
+		a.log.Info("closed database connection")
 	}
 }
 
@@ -57,6 +66,7 @@ func (a *App) Stop() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	<-ctx.Done()
 	if a.HTTPServer != nil {
 		if err := a.HTTPServer.Stop(ctx); err != nil {
 			a.log.Error("failed to stop HTTP server", op, sl.Err(err))

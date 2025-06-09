@@ -1,17 +1,19 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"github.com/joho/godotenv"
+	"golang.org/x/sync/errgroup"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"sso/internal/app"
 	"sso/internal/config"
 	"sso/internal/lib/logger/sl"
 	"syscall"
+	"time"
 )
 
 const (
@@ -33,28 +35,70 @@ func main() {
 	// Initialize app
 	application := app.New(log, cfg.GRPC.Port, cfg.HTTPServer.Port, cfg.DSN, cfg.JWT.TokenTTL, cfg.JWT.RefreshTTL)
 
-	// Launch gRPC
-	go func() {
-		application.GRPCServer.MustRun()
-		log.Info("gRPC server started")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-		log.Info("starting HTTP server", slog.Int("port", cfg.HTTPServer.Port))
-		if err := application.HTTPServer.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("failed to start HTTP server", sl.Err(err))
+	grp, grpCtx := errgroup.WithContext(ctx)
+
+	// Launch gRPC
+	grp.Go(func() error {
+		log.Info("starting gRPC server", slog.Int("port", cfg.GRPC.Port))
+
+		// start a gRPC server in a separate goroutine
+		errChan := make(chan error, 1)
+		go func() {
+			errChan <- application.GRPCServer.Run()
+		}()
+
+		// wait for context cancellation or server error
+		select {
+		case <-grpCtx.Done():
+			application.GRPCServer.Stop()
+			return grpCtx.Err()
+		case err := <-errChan:
+			return err
 		}
-	}()
+	})
+
+	// Launch HTTP
+	grp.Go(func() error {
+		log.Info("starting HTTP server", slog.Int("port", cfg.HTTPServer.Port))
+
+		// start an HTTP server
+		if err := application.HTTPServer.Start(); err != nil {
+			return err
+		}
+
+		// wait for context cancellation or server error
+		<-grpCtx.Done()
+
+		// graceful shutdown of the HTTP server
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer shutdownCancel()
+
+		return application.HTTPServer.Stop(shutdownCtx)
+	})
 
 	// Graceful shutdown
 	// channel for signal info
 	stop := make(chan os.Signal, 1)
-	// Listening the signals
+	// Listening to the signals
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
 
-	// waiting the data from channel (pkill -2 or SIGTERM)
-	<-stop
+	// waiting the data from a channel (pkill -2 or SIGTERM)
+	go func() {
+		<-stop
+		log.Info("received signal to stop")
+		cancel() // context cancellation in goroutines
+	}()
 
-	// initiate graceful shutdown
-	application.Stop()
+	// wait for all goroutines to finish
+	if err := grp.Wait(); err != nil && !errors.Is(err, context.Canceled) {
+		log.Error("server exited with error", sl.Err(err))
+	}
+
+	// initiate a graceful shutdown
+	application.CloseStorage()
 	log.Info("Gracefully stopped")
 }
 

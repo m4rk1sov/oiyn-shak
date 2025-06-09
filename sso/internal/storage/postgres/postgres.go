@@ -118,7 +118,7 @@ func (s *Storage) User(ctx context.Context, email string) (models.User, error) {
 	return user, nil
 }
 
-func (s *Storage) App(ctx context.Context, id int) (models.App, error) {
+func (s *Storage) App(ctx context.Context, id int32) (models.App, error) {
 	const op = "storage.postgres.App"
 
 	query := `SELECT id, name, secret FROM apps WHERE id = $1`

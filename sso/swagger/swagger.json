@@ -32,8 +32,7 @@
           "200": {
             "description": "A successful response.",
             "schema": {
-              "type": "object",
-              "properties": {}
+              "$ref": "#/definitions/authForgotPasswordResponse"
             }
           },
           "default": {
@@ -203,8 +202,7 @@
           "200": {
             "description": "A successful response.",
             "schema": {
-              "type": "object",
-              "properties": {}
+              "$ref": "#/definitions/authResetPasswordResponse"
             }
           },
           "default": {
@@ -270,8 +268,7 @@
           "200": {
             "description": "A successful response.",
             "schema": {
-              "type": "object",
-              "properties": {}
+              "$ref": "#/definitions/authEmailVerifyResponse"
             }
           },
           "default": {
@@ -305,8 +302,7 @@
           "200": {
             "description": "A successful response.",
             "schema": {
-              "type": "object",
-              "properties": {}
+              "$ref": "#/definitions/authSendEmailVerificationResponse"
             }
           },
           "default": {
@@ -413,6 +409,20 @@
         }
       }
     },
+    "authEmailVerifyResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string"
+        },
+        "activated": {
+          "type": "boolean"
+        }
+      }
+    },
     "authForgotPasswordRequest": {
       "type": "object",
       "properties": {
@@ -422,6 +432,21 @@
         "appId": {
           "type": "integer",
           "format": "int32"
+        }
+      }
+    },
+    "authForgotPasswordResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string"
+        },
+        "expiresAtUnix": {
+          "type": "string",
+          "format": "int64"
         }
       }
     },
@@ -443,6 +468,9 @@
         },
         "address": {
           "type": "string"
+        },
+        "activated": {
+          "type": "boolean"
         }
       }
     },
@@ -567,6 +595,9 @@
         },
         "email": {
           "type": "string"
+        },
+        "activated": {
+          "type": "boolean"
         }
       }
     },
@@ -581,6 +612,17 @@
         }
       }
     },
+    "authResetPasswordResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
     "authSendEmailVerificationRequest": {
       "type": "object",
       "properties": {
@@ -591,6 +633,21 @@
         "appId": {
           "type": "integer",
           "format": "int32"
+        }
+      }
+    },
+    "authSendEmailVerificationResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string"
+        },
+        "expiresAtUnix": {
+          "type": "string",
+          "format": "int64"
         }
       }
     },

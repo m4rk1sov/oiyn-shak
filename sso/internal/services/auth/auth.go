@@ -10,6 +10,7 @@ import (
 	"sso/internal/domain/models"
 	"sso/internal/lib/jwt"
 	"sso/internal/lib/logger/sl"
+	"sso/internal/services"
 	"sso/internal/storage"
 	"sso/internal/validator"
 	"time"
@@ -24,22 +25,33 @@ type UserSaver interface {
 		ctx context.Context,
 		email string,
 		passwordHash []byte,
-	) (uid int64, err error)
+		name string,
+		phone string,
+		address string,
+	) (uid int64, resName string, resEmail string, activated bool, err error)
 	AddUserPermission(ctx context.Context, userID int64, permissionID int64) error
 }
 
 type RefreshSaver interface {
-	SaveRefresh(ctx context.Context, refresh string, userID int64, appID int, expiresAt time.Time) error
+	SaveRefresh(ctx context.Context, refresh string, userID int64, appID int32, expiresAt time.Time) error
 	DeleteRefresh(ctx context.Context, token string) error
 	ExistsRefresh(ctx context.Context, token string) (bool, error)
 }
 
 type UserProvider interface {
-	User(ctx context.Context, email string) (models.User, error)
+	User(ctx context.Context,
+		email string,
+		name string,
+		phone string,
+		address string,
+		activated bool,
+	) (models.User, error)
+	UserByID(ctx context.Context, userID int64) (models.User, error)
+	UserByEmail(ctx context.Context, email string) (models.User, error)
 }
 
 type AppProvider interface {
-	App(ctx context.Context, appID int) (models.App, error)
+	App(ctx context.Context, appID int32) (models.App, error)
 }
 
 type Auth struct {
@@ -73,64 +85,79 @@ func New(
 }
 
 // Registers a new user and returns ID, returns error if email already exists
-func (a *Auth) RegisterNewUser(ctx context.Context, email string, password string) (int64, error) {
+func (a *Auth) RegisterNewUser(ctx context.Context,
+	email string,
+	password string,
+	name string,
+	phone string,
+	address string,
+) (int64, string, string, bool, error) {
 	// op - name of the current package and function; convenient to put in logs and errors to find problems faster
 	const op = "Auth.RegisterNewUser"
 
 	log := a.log.With(
 		slog.String("op", op),
 		slog.String("email", email),
+		slog.String("name", name),
+		slog.String("phone", phone),
+		slog.String("address", address),
 	)
 
 	log.Info("registering user")
 
 	v := validator.New()
-	validator.ValidateUserInput(v, email, password)
+	validator.ValidateUserEmail(v, email)
 	if !v.Valid() {
-		log.Error("invalid user input", slog.Any("errors", v.Errors))
-		return 0, fmt.Errorf("%s: validation error: %v", op, v.Errors)
+		log.Error("invalid user email", slog.Any("errors", v.Errors))
+		return 0, "", "", false, fmt.Errorf("%s: validation error: %v", op, services.ErrInvalidEmail)
+	}
+	validator.ValidateUserPassword(v, password)
+	if !v.Valid() {
+		log.Error("invalid user password", slog.Any("errors", v.Errors))
+		return 0, "", "", false, fmt.Errorf("%s: validation error: %v", op, services.ErrInvalidPassword)
 	}
 
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), 14)
 	if err != nil {
 		log.Error("failed to generate password hash", sl.Err(err))
 
-		return 0, fmt.Errorf("%s: %w", op, err)
+		return 0, "", "", false, fmt.Errorf("%s: %w", op, err)
 	}
 
 	// saving user in DB
-	id, err := a.usrSaver.SaveUser(ctx, email, passwordHash)
+	id, name, email, activated, err := a.usrSaver.SaveUser(ctx, email, passwordHash, name, phone, address)
 	if err != nil {
 		log.Error("failed to save user", sl.Err(err))
 
-		return 0, fmt.Errorf("%s: %w", op, err)
+		return 0, "", "", false, fmt.Errorf("%s: %w", op, err)
 	}
 
 	if err := a.usrSaver.AddUserPermission(ctx, id, 1); err != nil {
 		log.Error("failed to assign user permission", sl.Err(err))
 
-		return 0, fmt.Errorf("%s: %w", op, err)
+		return 0, "", "", false, fmt.Errorf("%s: %w", op, err)
 	}
 
-	return id, nil
+	return id, name, email, activated, nil
 }
 
 func (a *Auth) Login(
 	ctx context.Context,
 	email string,
 	password string,
-	appID int,
+	appID int32,
 ) (string, string, int64, error) {
 	const op = "Auth.Login"
 
 	log := a.log.With(
 		slog.String("op", op),
-		slog.String("username", email),
+		slog.String("email", email),
+		slog.Int("appID", int(appID)),
 	)
 
 	log.Info("attempting to login user")
 
-	user, err := a.usrProvider.User(ctx, email)
+	user, err := a.usrProvider.UserByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, storage.ErrUserNotFound) {
 			a.log.Warn("user not found", sl.Err(err))
@@ -196,45 +223,46 @@ func (a *Auth) Logout(ctx context.Context, refresh string) (bool, error) {
 	return true, nil
 }
 
-func (a *Auth) GetUserInfo(ctx context.Context, token string) (int64, string, error) {
+func (a *Auth) GetUserInfo(ctx context.Context, token string) (int64, string, string, string, string, bool, error) {
 	const op = "Auth.GetUserInfo"
 
 	claims, err := jwt.DecodeWithoutValidation(token)
 	if err != nil {
 		a.log.Error("failed to decode token", slog.String("op", op), sl.Err(err))
-		return 0, "", fmt.Errorf("%s: %w", op, err)
+		return 0, "", "", "", "", false, fmt.Errorf("%s: %w", op, err)
 	}
 
 	appIDFloat, ok := claims["app_id"].(float64)
 	if !ok {
-		return 0, "", fmt.Errorf("%s: app_id not found in token", op)
+		return 0, "", "", "", "", false, fmt.Errorf("%s: app_id not found in token", op)
 	}
 
-	appID := int(appIDFloat)
+	appID := int32(appIDFloat)
 
 	app, err := a.appProvider.App(ctx, appID)
 	if err != nil {
 		a.log.Error("failed to get app", slog.String("op", op), sl.Err(err))
-		return 0, "", fmt.Errorf("%s: %w", op, err)
+		return 0, "", "", "", "", false, fmt.Errorf("%s: %w", op, err)
 	}
 
 	claims, err = jwt.ValidateToken(token, app.Secret)
 	if err != nil {
 		a.log.Error("invalid token", slog.String("op", op), sl.Err(err))
-		return 0, "", fmt.Errorf("%s: %w", op, err)
+		return 0, "", "", "", "", false, fmt.Errorf("%s: %w", op, err)
 	}
 
 	userID, ok := claims["user_id"].(float64)
 	if !ok {
-		return 0, "", fmt.Errorf("%s: user_id not found in token", op)
+		return 0, "", "", "", "", false, fmt.Errorf("%s: user_id not found in token", op)
 	}
 
-	email, ok := claims["email"].(string)
-	if !ok {
-		return 0, "", fmt.Errorf("%s: email not found in token", op)
+	user, err := a.usrProvider.UserByID(ctx, int64(userID))
+	if err != nil {
+		a.log.Error("failed to get user", slog.String("op", op), sl.Err(err))
+		return 0, "", "", "", "", false, fmt.Errorf("%s: %w", op, err)
 	}
 
-	return int64(userID), email, nil
+	return user.ID, user.Email, user.Name, user.Phone, user.Address, user.Activated, nil
 }
 
 func (a *Auth) RefreshToken(ctx context.Context, refresh string) (string, string, int64, error) {
@@ -251,7 +279,7 @@ func (a *Auth) RefreshToken(ctx context.Context, refresh string) (string, string
 		return "", "", 0, fmt.Errorf("%s: app_id not found in token", op)
 	}
 
-	appID := int(appIDFloat)
+	appID := int32(appIDFloat)
 
 	app, err := a.appProvider.App(ctx, appID)
 	if err != nil {
@@ -264,12 +292,12 @@ func (a *Auth) RefreshToken(ctx context.Context, refresh string) (string, string
 		a.log.Error("invalid refresh token", slog.String("op", op), sl.Err(err))
 	}
 
-	_, ok = claims["user_id"].(float64)
+	userID, ok := claims["user_id"].(float64)
 	if !ok {
 		return "", "", 0, fmt.Errorf("%s: missing user_id", op)
 	}
 
-	user, err := a.usrProvider.User(ctx, claims["email"].(string))
+	user, err := a.usrProvider.UserByID(ctx, int64(userID))
 	if err != nil {
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}

@@ -32,21 +32,21 @@ func NewServer(grpcAddr string, port int) *Server {
 }
 
 func (s *Server) Start() error {
-	ctx := context.Background()
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	//ctx := context.Background()
+	//ctx, cancel := context.WithCancel(ctx)
+	//defer cancel()
 
 	// gRPC-Gateway mux for API endpoints
 	gwMux := runtime.NewServeMux()
 
 	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 
-	err := ssov1.RegisterAuthHandlerFromEndpoint(ctx, gwMux, s.grpcAddr, opts)
+	err := ssov1.RegisterAuthHandlerFromEndpoint(context.Background(), gwMux, s.grpcAddr, opts)
 	if err != nil {
 		return fmt.Errorf("failed to register auth handler: %w", err)
 	}
 
-	err = ssov1.RegisterPermissionHandlerFromEndpoint(ctx, gwMux, s.grpcAddr, opts)
+	err = ssov1.RegisterPermissionHandlerFromEndpoint(context.Background(), gwMux, s.grpcAddr, opts)
 	if err != nil {
 		return fmt.Errorf("failed to register permission handler: %w", err)
 	}
@@ -58,7 +58,7 @@ func (s *Server) Start() error {
 	s.setupSwaggerUI(mainMux)
 
 	// API endpoints
-	mainMux.Handle("/", gwMux)
+	mainMux.Handle("/v1/", gwMux)
 	//mainMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 	//	if strings.HasPrefix(r.URL.Path, "/swagger") {
 	//		http.NotFound(w, r)
@@ -92,7 +92,7 @@ func (s *Server) Start() error {
 		}
 	}()
 
-	return err
+	return nil
 }
 
 func (s *Server) Stop(ctx context.Context) error {
@@ -116,18 +116,6 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-//func ServeSwagger(swaggerDir string) http.Handler {
-//	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-//		if r.URL.Path == "/swagger" || r.URL.Path == "/swagger/" {
-//			http.Redirect(w, r, "/swagger/index.html", http.StatusFound)
-//			return
-//		}
-//
-//		filePath := path.Join(swaggerDir, r.URL.Path[len("/swagger/"):])
-//		http.ServeFile(w, r, filePath)
-//	})
-//}
-
 func (s *Server) setupSwaggerUI(mux *http.ServeMux) {
 	swaggerHandler := v5emb.NewHandlerWithConfig(swgui.Config{
 		Title:       "SSO API Documentation",
@@ -137,16 +125,13 @@ func (s *Server) setupSwaggerUI(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("/swagger/swagger.json", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Printf("Request for swagger.json received\n")
 		w.Header().Set("Content-Type", "application/json")
-		//if len(s.swaggerSpec) > 0 {
-		//	_, err := w.Write(s.swaggerSpec)
-		//	if err != nil {
-		//		return
-		//	}
-		//} else {
-		file, err := SwaggerAssets.Open("swagger/swagger.json")
+
+		file, err := SwaggerAssets.Open("/swagger.json")
 		if err != nil {
-			http.Error(w, "Swagger spec not found", http.StatusNotFound)
+			fmt.Printf("Error opening swagger.json: %v\n", err)
+			http.Error(w, fmt.Sprintf("Swagger spec not found: %v", err), http.StatusNotFound)
 			return
 		}
 		defer func(file http.File) {
@@ -155,8 +140,9 @@ func (s *Server) setupSwaggerUI(mux *http.ServeMux) {
 				return
 			}
 		}(file)
+
+		fmt.Printf("Successfully opened swagger file\n")
 		http.ServeContent(w, r, "swagger.json", time.Time{}, file)
-		//}
 	})
 
 	mux.Handle("/swagger/", swaggerHandler)
