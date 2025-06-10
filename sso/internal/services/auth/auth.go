@@ -52,6 +52,11 @@ type UserProvider interface {
 
 type AppProvider interface {
 	App(ctx context.Context, appID int32) (models.App, error)
+	GetAppSecret(ctx context.Context, appID int32) (string, error)
+}
+
+type PermissionProvider interface {
+	UserPermissions(ctx context.Context, userID int64) ([]models.Permission, error)
 }
 
 type Auth struct {
@@ -60,6 +65,7 @@ type Auth struct {
 	refreshSaver RefreshSaver
 	usrProvider  UserProvider
 	appProvider  AppProvider
+	permProvider PermissionProvider
 	tokenTTL     time.Duration
 	refreshTTL   time.Duration
 }
@@ -70,6 +76,7 @@ func New(
 	refreshSaver RefreshSaver,
 	userProvider UserProvider,
 	appProvider AppProvider,
+	permissionProvider PermissionProvider,
 	tokenTTL time.Duration,
 	refreshTTL time.Duration,
 ) *Auth {
@@ -79,6 +86,7 @@ func New(
 		refreshSaver: refreshSaver,
 		usrProvider:  userProvider,
 		appProvider:  appProvider,
+		permProvider: permissionProvider,
 		tokenTTL:     tokenTTL,
 		refreshTTL:   refreshTTL,
 	}
@@ -182,9 +190,13 @@ func (a *Auth) Login(
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
 
-	log.Info("user logged in successfully")
+	permissions, err := a.permProvider.UserPermissions(ctx, user.ID)
+	if err != nil {
+		a.log.Error("failed to get user permissions", sl.Err(err))
+		return "", "", 0, fmt.Errorf("%s: %w", op, err)
+	}
 
-	token, err := jwt.NewToken(user, app, a.tokenTTL)
+	token, err := jwt.NewToken(user, app, permissions, a.tokenTTL)
 	if err != nil {
 		a.log.Error("failed to generate access token", sl.Err(err))
 
@@ -209,6 +221,8 @@ func (a *Auth) Login(
 		return "", "", 0, fmt.Errorf("%s: invalid refresh token", op)
 	}
 
+	log.Info("user logged in successfully")
+
 	return token, refresh, expiresAt, nil
 }
 
@@ -232,12 +246,7 @@ func (a *Auth) GetUserInfo(ctx context.Context, token string) (int64, string, st
 		return 0, "", "", "", "", false, fmt.Errorf("%s: %w", op, err)
 	}
 
-	appIDFloat, ok := claims["app_id"].(float64)
-	if !ok {
-		return 0, "", "", "", "", false, fmt.Errorf("%s: app_id not found in token", op)
-	}
-
-	appID := int32(appIDFloat)
+	appID := claims.AppID
 
 	app, err := a.appProvider.App(ctx, appID)
 	if err != nil {
@@ -245,16 +254,13 @@ func (a *Auth) GetUserInfo(ctx context.Context, token string) (int64, string, st
 		return 0, "", "", "", "", false, fmt.Errorf("%s: %w", op, err)
 	}
 
-	claims, err = jwt.ValidateToken(token, app.Secret)
+	validClaims, err := jwt.ValidateToken(token, app.Secret)
 	if err != nil {
 		a.log.Error("invalid token", slog.String("op", op), sl.Err(err))
 		return 0, "", "", "", "", false, fmt.Errorf("%s: %w", op, err)
 	}
 
-	userID, ok := claims["user_id"].(float64)
-	if !ok {
-		return 0, "", "", "", "", false, fmt.Errorf("%s: user_id not found in token", op)
-	}
+	userID := validClaims.UserID
 
 	user, err := a.usrProvider.UserByID(ctx, int64(userID))
 	if err != nil {
@@ -274,12 +280,7 @@ func (a *Auth) RefreshToken(ctx context.Context, refresh string) (string, string
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
 
-	appIDFloat, ok := claims["app_id"].(float64)
-	if !ok {
-		return "", "", 0, fmt.Errorf("%s: app_id not found in token", op)
-	}
-
-	appID := int32(appIDFloat)
+	appID := claims.AppID
 
 	app, err := a.appProvider.App(ctx, appID)
 	if err != nil {
@@ -287,22 +288,25 @@ func (a *Auth) RefreshToken(ctx context.Context, refresh string) (string, string
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
 
-	claims, err = jwt.ValidateRefreshToken(refresh, app.Secret)
+	validClaims, err := jwt.ValidateRefreshToken(refresh, app.Secret)
 	if err != nil {
 		a.log.Error("invalid refresh token", slog.String("op", op), sl.Err(err))
 	}
 
-	userID, ok := claims["user_id"].(float64)
-	if !ok {
-		return "", "", 0, fmt.Errorf("%s: missing user_id", op)
-	}
+	userID := validClaims.UserID
 
-	user, err := a.usrProvider.UserByID(ctx, int64(userID))
+	user, err := a.usrProvider.UserByID(ctx, userID)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
 
-	newToken, err := jwt.NewToken(user, app, a.tokenTTL)
+	permissions, err := a.permProvider.UserPermissions(ctx, user.ID)
+	if err != nil {
+		a.log.Error("failed to get user permissions", sl.Err(err))
+		return "", "", 0, fmt.Errorf("%s: %w", op, err)
+	}
+
+	newToken, err := jwt.NewToken(user, app, permissions, a.tokenTTL)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
@@ -314,15 +318,24 @@ func (a *Auth) RefreshToken(ctx context.Context, refresh string) (string, string
 
 	expiresAt := time.Now().Add(a.tokenTTL).Unix()
 
-	err = a.refreshSaver.SaveRefresh(ctx, refresh, user.ID, app.ID, time.Now().Add(a.refreshTTL))
+	err = a.refreshSaver.DeleteRefresh(ctx, refresh)
+	if err != nil {
+		a.log.Warn("failed to delete refresh token", slog.String("op", op), sl.Err(err))
+	}
+
+	err = a.refreshSaver.SaveRefresh(ctx, newRefresh, user.ID, app.ID, time.Now().Add(a.refreshTTL))
 	if err != nil {
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
 
-	exists, err := a.refreshSaver.ExistsRefresh(ctx, refresh)
-	if err != nil || !exists {
-		return "", "", 0, fmt.Errorf("%s: invalid refresh token", op)
-	}
-
 	return newToken, newRefresh, expiresAt, nil
+}
+
+func (a *Auth) GetAppSecret(ctx context.Context, appID int32) (string, error) {
+	const op = "Auth.GetAppSecret"
+	app, err := a.appProvider.App(ctx, appID)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", op, err)
+	}
+	return app.Secret, nil
 }

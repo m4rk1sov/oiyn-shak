@@ -31,15 +31,15 @@ type TokenClaims struct {
 	jwt.RegisteredClaims
 }
 
-// creates new access JWT token for user and app
+// NewToken creates new access JWT token for user and app
 func NewToken(user models.User, app models.App, permissions []models.Permission, duration time.Duration) (string, error) {
 	now := time.Now()
-	
+
 	permissionCodes := make([]string, len(permissions))
 	for i, permission := range permissions {
 		permissionCodes[i] = permission.Code
 	}
-	
+
 	claims := TokenClaims{
 		UserID:      user.ID,
 		Email:       user.Email,
@@ -59,20 +59,20 @@ func NewToken(user models.User, app models.App, permissions []models.Permission,
 			ID:        fmt.Sprintf("%d-%d-%d", user.ID, app.ID, now.Unix()),
 		},
 	}
-	
+
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	
+
 	tokenString, err := token.SignedString([]byte(app.Secret))
 	if err != nil {
 		return "", err
 	}
-	
+
 	return tokenString, nil
 }
 
 func NewRefreshToken(user models.User, app models.App, duration time.Duration) (string, error) {
 	now := time.Now()
-	
+
 	claims := TokenClaims{
 		UserID:    user.ID,
 		Email:     user.Email,
@@ -91,14 +91,14 @@ func NewRefreshToken(user models.User, app models.App, duration time.Duration) (
 			ID:        fmt.Sprintf("refresh-%d-%d-%d", user.ID, app.ID, now.Unix()),
 		},
 	}
-	
+
 	refresh := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	
+
 	refreshString, err := refresh.SignedString([]byte(app.Secret))
 	if err != nil {
 		return "", err
 	}
-	
+
 	return refreshString, nil
 }
 
@@ -109,23 +109,23 @@ func ValidateToken(tokenString string, secret string) (*TokenClaims, error) {
 		}
 		return []byte(secret), nil
 	})
-	
+
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenExpired) {
 			return nil, ErrTokenExpired
 		}
 		return nil, ErrTokenInvalid
 	}
-	
+
 	claims, ok := token.Claims.(*TokenClaims)
 	if !ok || !token.Valid {
 		return nil, ErrClaimsInvalid
 	}
-	
+
 	if claims.Type != "access" {
 		return nil, ErrNotAccessToken
 	}
-	
+
 	return claims, nil
 }
 
@@ -134,11 +134,11 @@ func ValidateRefreshToken(refreshString string, secret string) (*TokenClaims, er
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if claims.Type != "refresh" {
 		return nil, ErrNotRefreshToken
 	}
-	
+
 	return claims, nil
 }
 
@@ -149,19 +149,19 @@ func ValidateTokenBase(tokenString string, secret string) (*TokenClaims, error) 
 		}
 		return []byte(secret), nil
 	})
-	
+
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenExpired) {
 			return nil, ErrTokenExpired
 		}
 		return nil, ErrTokenInvalid
 	}
-	
+
 	claims, ok := token.Claims.(*TokenClaims)
 	if !ok || !token.Valid {
 		return nil, ErrClaimsInvalid
 	}
-	
+
 	return claims, nil
 }
 
@@ -171,12 +171,12 @@ func DecodeWithoutValidation(tokenString string) (*TokenClaims, error) {
 	if err != nil {
 		return nil, ErrTokenMalformed
 	}
-	
+
 	claims, ok := token.Claims.(*TokenClaims)
 	if !ok {
 		return nil, ErrClaimsInvalid
 	}
-	
+
 	return claims, nil
 }
 
@@ -200,7 +200,7 @@ func (c *TokenClaims) HasAnyPermission(permissionCodes ...string) bool {
 	return false
 }
 
-// HasAllPermissions checks if the token has all of the permissions
+// HasAllPermissions checks if the token has all the permissions
 func (c *TokenClaims) HasAllPermissions(permissionCodes ...string) bool {
 	for _, required := range permissionCodes {
 		if !c.HasPermission(required) {
