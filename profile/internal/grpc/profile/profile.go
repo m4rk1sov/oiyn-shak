@@ -13,6 +13,7 @@ import (
 	rpc "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 )
 
@@ -27,6 +28,9 @@ func Register(gRPCServer *grpc.Server, profileService *profile.Service, log *slo
 		profileService: profileService,
 		log:            log,
 	})
+
+	reflection.Register(gRPCServer)
+	log.Info("Profile service registered")
 }
 
 type Profile interface {

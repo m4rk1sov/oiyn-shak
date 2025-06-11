@@ -2,8 +2,10 @@ package grpcapp
 
 import (
 	"fmt"
+	"os"
+	"profile/internal/app/auth"
 	"profile/internal/grpc/profile"
-	
+
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/recovery"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -31,14 +33,24 @@ func New(
 			return status.Errorf(codes.Internal, "Internal error")
 		}),
 	}
-	
+
+	jwtSecret := os.Getenv("SECRET_KEY")
+	if jwtSecret == "" {
+		log.Error("JWT_SECRET environment variable is required")
+	}
+
+	log.Info("Initializing JWT validator", slog.String("secret_length", fmt.Sprintf("%d chars", len(jwtSecret))))
+
+	jwtValidator := auth.NewJWTValidator(jwtSecret)
+
 	gRPCServer := grpc.NewServer(grpc.ChainUnaryInterceptor(
 		recovery.UnaryServerInterceptor(recoveryOpts...),
+		jwtValidator.AuthInterceptor(),
 	))
-	
+
 	// register the service
 	profile.Register(gRPCServer, profileService, log)
-	
+
 	// return App object with necessary fields
 	return &App{
 		log:        log,
@@ -55,32 +67,32 @@ func (a *App) MustRun() {
 
 func (a *App) Run() error {
 	const op = "grpcApp.Run"
-	
+
 	log := a.log.With(
 		slog.String("op", op),
 		slog.Int("port", a.port),
 	)
-	
+
 	// Listener for TCP connections
 	l, err := net.Listen("tcp", fmt.Sprintf(":%d", a.port))
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
-	
+
 	log.Info("grpc server started", slog.String("addr", l.Addr().String()))
-	
+
 	if err := a.gRPCServer.Serve(l); err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
-	
+
 	return nil
 }
 
 func (a *App) Stop() {
 	const op = "grpcApp.Stop"
-	
+
 	a.log.With(slog.String("op", op)).
 		Info("stopping grpc server", slog.Int("port", a.port))
-	
+
 	a.gRPCServer.GracefulStop()
 }

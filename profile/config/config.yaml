@@ -6,5 +6,5 @@ grpc:
   port: 44045
   timeout: 10h #5s in prod
 http_server:
-  port: 8080
+  port: 8081
   timeout: 1h
