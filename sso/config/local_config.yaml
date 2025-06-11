@@ -1,0 +1,10 @@
+env: "local" # dev, prod
+jwt:
+  token_ttl: 1h
+  refresh_ttl: 240h
+grpc:
+  port: 44044
+  timeout: 10h #5s in prod
+http_server:
+  port: 8080
+base_url: "http://localhost:8080"

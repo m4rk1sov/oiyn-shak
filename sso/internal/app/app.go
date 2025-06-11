@@ -1,0 +1,117 @@
+package app
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/signal"
+	grpcapp "sso/internal/app/grpc"
+	"sso/internal/lib/logger/sl"
+	"sso/internal/lib/mailer"
+	"sso/internal/services/auth"
+	"sso/internal/services/permission"
+	"sso/internal/storage/postgres"
+	"syscall"
+	"time"
+
+	httpserver "sso/internal/http"
+)
+
+type App struct {
+	GRPCServer *grpcapp.App
+	Storage    *postgres.Storage
+	HTTPServer *httpserver.Server
+	log        *slog.Logger
+}
+
+type SMTPConfig struct {
+	Host     string
+	Port     string
+	Username string
+	Password string
+	From     string
+	FromName string
+}
+
+func New(
+	log *slog.Logger,
+	grpcPort int,
+	httpPort int,
+	dsn string,
+	//mailtrapAPIToken string,
+	smtpConfig SMTPConfig,
+	baseURL string,
+	tokenTTL time.Duration,
+	refreshTTL time.Duration,
+) *App {
+	storage, err := postgres.New(dsn)
+	if err != nil {
+		panic(err)
+	}
+
+	//emailClient := mailer.NewMailtrapClient(mailtrapAPIToken)
+	emailClient := mailer.New(
+		smtpConfig.Host,
+		smtpConfig.Port,
+		smtpConfig.Username,
+		smtpConfig.Password,
+		smtpConfig.From,
+		smtpConfig.FromName,
+	)
+	permissionService := permission.New(log, storage, storage)
+	authService := auth.New(
+		log,
+		storage,           // UserSaver
+		storage,           // RefreshSaver
+		storage,           // UserProvider
+		storage,           // AppProvider
+		permissionService, // PermProvider
+		emailClient,
+		baseURL,
+		tokenTTL,
+		refreshTTL,
+	)
+
+	grpcApp := grpcapp.New(log, authService, permissionService, storage, permissionService, grpcPort)
+
+	grpcAddr := fmt.Sprintf("localhost:%d", grpcPort)
+	httpServer := httpserver.NewServer(grpcAddr, httpPort)
+
+	return &App{
+		GRPCServer: grpcApp,
+		HTTPServer: httpServer,
+		Storage:    storage,
+		log:        log,
+	}
+}
+
+func (a *App) CloseStorage() {
+	if a.Storage != nil {
+		a.Storage.Close()
+		a.log.Info("closed database connection")
+	}
+}
+
+func (a *App) Stop() {
+	const op = "app.Stop"
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	<-ctx.Done()
+	if a.HTTPServer != nil {
+		if err := a.HTTPServer.Stop(ctx); err != nil {
+			a.log.Error("failed to stop HTTP server", op, sl.Err(err))
+		}
+	}
+
+	if a.GRPCServer != nil {
+		a.GRPCServer.Stop()
+		a.log.Info("stopped gRPC server")
+	}
+	if a.Storage != nil {
+		a.Storage.Close()
+		a.log.Info("closed database connection")
+	}
+}
