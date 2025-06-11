@@ -23,11 +23,11 @@ var (
 type UserSaver interface {
 	SaveUser(
 		ctx context.Context,
-		email string,
-		passwordHash []byte,
 		name string,
 		phone string,
 		address string,
+		email string,
+		passwordHash []byte,
 	) (uid int64, resName string, resEmail string, activated bool, err error)
 	AddUserPermission(ctx context.Context, userID int64, permissionID int64) error
 }
@@ -39,13 +39,6 @@ type RefreshSaver interface {
 }
 
 type UserProvider interface {
-	User(ctx context.Context,
-		email string,
-		name string,
-		phone string,
-		address string,
-		activated bool,
-	) (models.User, error)
 	UserByID(ctx context.Context, userID int64) (models.User, error)
 	UserByEmail(ctx context.Context, email string) (models.User, error)
 }
@@ -55,8 +48,8 @@ type AppProvider interface {
 	GetAppSecret(ctx context.Context, appID int32) (string, error)
 }
 
-type PermissionProvider interface {
-	UserPermissions(ctx context.Context, userID int64) ([]models.Permission, error)
+type PermProvider interface {
+	GetUserPermissionsAsModels(ctx context.Context, userID int64) ([]models.Permission, error)
 }
 
 type Auth struct {
@@ -65,7 +58,7 @@ type Auth struct {
 	refreshSaver RefreshSaver
 	usrProvider  UserProvider
 	appProvider  AppProvider
-	permProvider PermissionProvider
+	permProvider PermProvider
 	tokenTTL     time.Duration
 	refreshTTL   time.Duration
 }
@@ -76,7 +69,7 @@ func New(
 	refreshSaver RefreshSaver,
 	userProvider UserProvider,
 	appProvider AppProvider,
-	permissionProvider PermissionProvider,
+	permProvider PermProvider,
 	tokenTTL time.Duration,
 	refreshTTL time.Duration,
 ) *Auth {
@@ -86,33 +79,33 @@ func New(
 		refreshSaver: refreshSaver,
 		usrProvider:  userProvider,
 		appProvider:  appProvider,
-		permProvider: permissionProvider,
+		permProvider: permProvider,
 		tokenTTL:     tokenTTL,
 		refreshTTL:   refreshTTL,
 	}
 }
 
-// Registers a new user and returns ID, returns error if email already exists
+// RegisterNewUser registers a new user and returns ID, returns error if email already exists
 func (a *Auth) RegisterNewUser(ctx context.Context,
-	email string,
-	password string,
 	name string,
 	phone string,
 	address string,
+	email string,
+	password string,
 ) (int64, string, string, bool, error) {
 	// op - name of the current package and function; convenient to put in logs and errors to find problems faster
 	const op = "Auth.RegisterNewUser"
-
+	
 	log := a.log.With(
 		slog.String("op", op),
-		slog.String("email", email),
 		slog.String("name", name),
 		slog.String("phone", phone),
 		slog.String("address", address),
+		slog.String("email", email),
 	)
-
+	
 	log.Info("registering user")
-
+	
 	v := validator.New()
 	validator.ValidateUserEmail(v, email)
 	if !v.Valid() {
@@ -124,28 +117,28 @@ func (a *Auth) RegisterNewUser(ctx context.Context,
 		log.Error("invalid user password", slog.Any("errors", v.Errors))
 		return 0, "", "", false, fmt.Errorf("%s: validation error: %v", op, services.ErrInvalidPassword)
 	}
-
+	
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), 14)
 	if err != nil {
 		log.Error("failed to generate password hash", sl.Err(err))
-
+		
 		return 0, "", "", false, fmt.Errorf("%s: %w", op, err)
 	}
-
+	
 	// saving user in DB
-	id, name, email, activated, err := a.usrSaver.SaveUser(ctx, email, passwordHash, name, phone, address)
+	id, name, email, activated, err := a.usrSaver.SaveUser(ctx, name, phone, address, email, passwordHash)
 	if err != nil {
 		log.Error("failed to save user", sl.Err(err))
-
+		
 		return 0, "", "", false, fmt.Errorf("%s: %w", op, err)
 	}
-
+	
 	if err := a.usrSaver.AddUserPermission(ctx, id, 1); err != nil {
 		log.Error("failed to assign user permission", sl.Err(err))
-
+		
 		return 0, "", "", false, fmt.Errorf("%s: %w", op, err)
 	}
-
+	
 	return id, name, email, activated, nil
 }
 
@@ -156,73 +149,73 @@ func (a *Auth) Login(
 	appID int32,
 ) (string, string, int64, error) {
 	const op = "Auth.Login"
-
+	
 	log := a.log.With(
 		slog.String("op", op),
 		slog.String("email", email),
 		slog.Int("appID", int(appID)),
 	)
-
+	
 	log.Info("attempting to login user")
-
+	
 	user, err := a.usrProvider.UserByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, storage.ErrUserNotFound) {
 			a.log.Warn("user not found", sl.Err(err))
-
+			
 			return "", "", 0, fmt.Errorf("%s: %w", op, ErrInvalidCredentials)
 		}
-
+		
 		a.log.Error("failed to get user", sl.Err(err))
-
+		
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
-
+	
 	if err := bcrypt.CompareHashAndPassword(user.PasswordHash, []byte(password)); err != nil {
 		a.log.Info("invalid credentials", sl.Err(err))
-
+		
 		return "", "", 0, fmt.Errorf("%s: %w", op, ErrInvalidCredentials)
 	}
-
+	
 	// info about app
 	app, err := a.appProvider.App(ctx, appID)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
-
-	permissions, err := a.permProvider.UserPermissions(ctx, user.ID)
+	
+	permissions, err := a.permProvider.GetUserPermissionsAsModels(ctx, user.ID)
 	if err != nil {
 		a.log.Error("failed to get user permissions", sl.Err(err))
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
-
+	
 	token, err := jwt.NewToken(user, app, permissions, a.tokenTTL)
 	if err != nil {
 		a.log.Error("failed to generate access token", sl.Err(err))
-
+		
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
-
+	
 	refresh, err := jwt.NewRefreshToken(user, app, a.refreshTTL)
 	if err != nil {
 		a.log.Error("failed to generate refresh token", sl.Err(err))
-
+		
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
 	expiresAt := time.Now().Add(a.tokenTTL).Unix()
-
+	
 	err = a.refreshSaver.SaveRefresh(ctx, refresh, user.ID, app.ID, time.Now().Add(a.refreshTTL))
 	if err != nil {
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
-
+	
 	exists, err := a.refreshSaver.ExistsRefresh(ctx, refresh)
 	if err != nil || !exists {
 		return "", "", 0, fmt.Errorf("%s: invalid refresh token", op)
 	}
-
+	
 	log.Info("user logged in successfully")
-
+	
 	return token, refresh, expiresAt, nil
 }
 
@@ -233,101 +226,101 @@ func (a *Auth) Logout(ctx context.Context, refresh string) (bool, error) {
 		a.log.Error("failed to delete refresh token", slog.String("op", op), sl.Err(err))
 		return false, fmt.Errorf("%s: %w", op, err)
 	}
-
+	
 	return true, nil
 }
 
 func (a *Auth) GetUserInfo(ctx context.Context, token string) (int64, string, string, string, string, bool, error) {
 	const op = "Auth.GetUserInfo"
-
+	
 	claims, err := jwt.DecodeWithoutValidation(token)
 	if err != nil {
 		a.log.Error("failed to decode token", slog.String("op", op), sl.Err(err))
 		return 0, "", "", "", "", false, fmt.Errorf("%s: %w", op, err)
 	}
-
+	
 	appID := claims.AppID
-
+	
 	app, err := a.appProvider.App(ctx, appID)
 	if err != nil {
 		a.log.Error("failed to get app", slog.String("op", op), sl.Err(err))
 		return 0, "", "", "", "", false, fmt.Errorf("%s: %w", op, err)
 	}
-
+	
 	validClaims, err := jwt.ValidateToken(token, app.Secret)
 	if err != nil {
 		a.log.Error("invalid token", slog.String("op", op), sl.Err(err))
 		return 0, "", "", "", "", false, fmt.Errorf("%s: %w", op, err)
 	}
-
+	
 	userID := validClaims.UserID
-
-	user, err := a.usrProvider.UserByID(ctx, int64(userID))
+	
+	user, err := a.usrProvider.UserByID(ctx, userID)
 	if err != nil {
 		a.log.Error("failed to get user", slog.String("op", op), sl.Err(err))
 		return 0, "", "", "", "", false, fmt.Errorf("%s: %w", op, err)
 	}
-
+	
 	return user.ID, user.Email, user.Name, user.Phone, user.Address, user.Activated, nil
 }
 
 func (a *Auth) RefreshToken(ctx context.Context, refresh string) (string, string, int64, error) {
 	const op = "Auth.RefreshTokens"
-
+	
 	claims, err := jwt.DecodeWithoutValidation(refresh)
 	if err != nil {
 		a.log.Error("failed to decode token", slog.String("op", op), sl.Err(err))
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
-
+	
 	appID := claims.AppID
-
+	
 	app, err := a.appProvider.App(ctx, appID)
 	if err != nil {
 		a.log.Error("failed to get app", slog.String("op", op), sl.Err(err))
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
-
+	
 	validClaims, err := jwt.ValidateRefreshToken(refresh, app.Secret)
 	if err != nil {
 		a.log.Error("invalid refresh token", slog.String("op", op), sl.Err(err))
 	}
-
+	
 	userID := validClaims.UserID
-
+	
 	user, err := a.usrProvider.UserByID(ctx, userID)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
-
-	permissions, err := a.permProvider.UserPermissions(ctx, user.ID)
+	
+	permissions, err := a.permProvider.GetUserPermissionsAsModels(ctx, user.ID)
 	if err != nil {
 		a.log.Error("failed to get user permissions", sl.Err(err))
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
-
+	
 	newToken, err := jwt.NewToken(user, app, permissions, a.tokenTTL)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
-
+	
 	newRefresh, err := jwt.NewRefreshToken(user, app, a.refreshTTL)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
-
+	
 	expiresAt := time.Now().Add(a.tokenTTL).Unix()
-
+	
 	err = a.refreshSaver.DeleteRefresh(ctx, refresh)
 	if err != nil {
 		a.log.Warn("failed to delete refresh token", slog.String("op", op), sl.Err(err))
 	}
-
+	
 	err = a.refreshSaver.SaveRefresh(ctx, newRefresh, user.ID, app.ID, time.Now().Add(a.refreshTTL))
 	if err != nil {
 		return "", "", 0, fmt.Errorf("%s: %w", op, err)
 	}
-
+	
 	return newToken, newRefresh, expiresAt, nil
 }
 
@@ -338,4 +331,72 @@ func (a *Auth) GetAppSecret(ctx context.Context, appID int32) (string, error) {
 		return "", fmt.Errorf("%s: %w", op, err)
 	}
 	return app.Secret, nil
+}
+
+func (a *Auth) ForgotPassword(ctx context.Context, email string, appID int32) (bool, string, int64, error) {
+	const op = "Auth.ForgotPassword"
+	
+	log := a.log.With(
+		slog.String("op", op),
+		slog.String("email", email),
+		slog.Int("appID", int(appID)),
+	)
+	
+	log.Info("processing forgot password request")
+	
+	// TODO: Implement forgot password logic
+	// For now, return not implemented
+	log.Warn("forgot password not implemented yet")
+	
+	return false, "Forgot password functionality is not implemented yet", 0, fmt.Errorf("%s: not implemented", op)
+}
+
+func (a *Auth) ResetPassword(ctx context.Context, token string, password string) (bool, string, error) {
+	const op = "Auth.ResetPassword"
+	
+	log := a.log.With(
+		slog.String("op", op),
+	)
+	
+	log.Info("processing reset password request")
+	
+	// TODO: Implement reset password logic
+	// For now, return not implemented
+	log.Warn("reset password not implemented yet")
+	
+	return false, "Reset password functionality is not implemented yet", fmt.Errorf("%s: not implemented", op)
+}
+
+func (a *Auth) SendVerificationEmail(ctx context.Context, userId int64, appID int32) (bool, string, int64, error) {
+	const op = "Auth.SendVerificationEmail"
+	
+	log := a.log.With(
+		slog.String("op", op),
+		slog.Int64("userID", userId),
+		slog.Int("appID", int(appID)),
+	)
+	
+	log.Info("processing send verification email request")
+	
+	// TODO: Implement email verification logic
+	// For now, return not implemented
+	log.Warn("send verification email not implemented yet")
+	
+	return false, "Email verification functionality is not implemented yet", 0, fmt.Errorf("%s: not implemented", op)
+}
+
+func (a *Auth) EmailVerify(ctx context.Context, token string) (bool, string, bool, error) {
+	const op = "Auth.EmailVerify"
+	
+	log := a.log.With(
+		slog.String("op", op),
+	)
+	
+	log.Info("processing email verification request")
+	
+	// TODO: Implement email verification logic
+	// For now, return not implemented
+	log.Warn("email verify not implemented yet")
+	
+	return false, "Email verification functionality is not implemented yet", false, fmt.Errorf("%s: not implemented", op)
 }

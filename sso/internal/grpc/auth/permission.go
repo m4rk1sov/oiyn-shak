@@ -12,10 +12,10 @@ import (
 
 type permissionServer struct {
 	ssov1.UnimplementedPermissionServer
-	permission Permission
+	permission PermissionService
 }
 
-type Permission interface {
+type PermissionService interface {
 	GetUserPermissions(
 		ctx context.Context,
 		userId int64,

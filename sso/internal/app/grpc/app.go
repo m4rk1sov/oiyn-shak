@@ -218,7 +218,7 @@ func checkPermissions(
 func New(
 	log *slog.Logger,
 	authService authgrpc.Auth,
-	permissionService authgrpc.Permission,
+	permissionService authgrpc.PermissionService,
 	appProvider AppProvider,
 	permProvider permission.PermProvider,
 	port int,

@@ -37,10 +37,19 @@ func New(
 		panic(err)
 	}
 
-	authService := auth.New(log, storage, storage, storage, storage, tokenTTL, refreshTTL)
-	permissionService := permission.New(log, storage)
+	permissionService := permission.New(log, storage, storage)
+	authService := auth.New(
+		log,
+		storage,           // UserSaver
+		storage,           // RefreshSaver
+		storage,           // UserProvider
+		storage,           // AppProvider
+		permissionService, // PermProvider
+		tokenTTL,
+		refreshTTL,
+	)
 
-	grpcApp := grpcapp.New(log, authService, permissionService, grpcPort)
+	grpcApp := grpcapp.New(log, authService, permissionService, storage, permissionService, grpcPort)
 
 	grpcAddr := fmt.Sprintf("localhost:%d", grpcPort)
 	httpServer := httpserver.NewServer(grpcAddr, httpPort)
