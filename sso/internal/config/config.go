@@ -8,12 +8,14 @@ import (
 )
 
 type Config struct {
-	Env            string     `json:"env" yaml:"env" env-default:"local"`
-	DSN            string     `env:"DSN_STRING"`
-	JWT            JWTConfig  `yaml:"jwt"`
-	GRPC           GRPCConfig `yaml:"grpc"`
-	MigrationsPath string     `env:"MIGRATE_PATH"`
-	HTTPServer     HTTPServer `yaml:"http_server"`
+	Env            string         `json:"env" yaml:"env" env-default:"local"`
+	DSN            string         `env:"DSN_STRING"`
+	JWT            JWTConfig      `yaml:"jwt"`
+	GRPC           GRPCConfig     `yaml:"grpc"`
+	MigrationsPath string         `env:"MIGRATE_PATH"`
+	HTTPServer     HTTPServer     `yaml:"http_server"`
+	Mailtrap       MailtrapConfig `yaml:"mailtrap"`
+	BaseURL        string         `yaml:"base_url"`
 }
 
 type JWTConfig struct {
@@ -28,6 +30,10 @@ type HTTPServer struct {
 type GRPCConfig struct {
 	Port    int           `yaml:"port"`
 	Timeout time.Duration `yaml:"timeout"`
+}
+
+type MailtrapConfig struct {
+	APIToken string `env:"MAILTRAP_API"`
 }
 
 // Be careful with panics, we use them only in app launching

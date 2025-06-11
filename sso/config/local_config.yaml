@@ -7,3 +7,4 @@ grpc:
   timeout: 10h #5s in prod
 http_server:
   port: 8080
+base_url: "http://localhost:8080"

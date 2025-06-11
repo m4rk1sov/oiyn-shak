@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	grpcapp "sso/internal/app/grpc"
 	"sso/internal/lib/logger/sl"
+	"sso/internal/lib/mailer"
 	"sso/internal/services/auth"
 	"sso/internal/services/permission"
 	"sso/internal/storage/postgres"
@@ -29,6 +30,8 @@ func New(
 	grpcPort int,
 	httpPort int,
 	dsn string,
+	mailtrapAPIToken string,
+	baseURL string,
 	tokenTTL time.Duration,
 	refreshTTL time.Duration,
 ) *App {
@@ -37,6 +40,7 @@ func New(
 		panic(err)
 	}
 
+	emailClient := mailer.NewMailtrapClient(mailtrapAPIToken)
 	permissionService := permission.New(log, storage, storage)
 	authService := auth.New(
 		log,
@@ -45,6 +49,8 @@ func New(
 		storage,           // UserProvider
 		storage,           // AppProvider
 		permissionService, // PermProvider
+		emailClient,
+		baseURL,
 		tokenTTL,
 		refreshTTL,
 	)

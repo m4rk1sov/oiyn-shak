@@ -33,7 +33,7 @@ func main() {
 	log := setupLogger(cfg.Env)
 
 	// Initialize app
-	application := app.New(log, cfg.GRPC.Port, cfg.HTTPServer.Port, cfg.DSN, cfg.JWT.TokenTTL, cfg.JWT.RefreshTTL)
+	application := app.New(log, cfg.GRPC.Port, cfg.HTTPServer.Port, cfg.DSN, cfg.Mailtrap.APIToken, cfg.BaseURL, cfg.JWT.TokenTTL, cfg.JWT.RefreshTTL)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

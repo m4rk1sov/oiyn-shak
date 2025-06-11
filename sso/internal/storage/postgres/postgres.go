@@ -21,6 +21,11 @@ type Storage struct {
 	db *pgxpool.Pool
 }
 
+func (s *Storage) SaveUser(ctx context.Context, name, phone, address, email string, passwordHash []byte) (int64, string, string, bool, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func Config(dsn string) *pgxpool.Config {
 	const defaultMaxConns = int32(50)
 	const defaultMinConns = int32(0)
@@ -81,10 +86,21 @@ func (s *Storage) Close() {
 	s.db.Close()
 }
 
-func (s *Storage) SaveUser(ctx context.Context, name string, phone string, address string, email string, passwordHash []byte) (int64, string, string, bool, error) {
-	const op = "storage.postgres.SaveUser"
+func (s *Storage) SaveUserWithPermission(ctx context.Context, name string, phone string, address string, email string, passwordHash []byte, permissionID int64) (int64, string, string, bool, error) {
+	const op = "storage.postgres.SaveUserWithPermission"
 
-	query := `
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return 0, "", "", false, fmt.Errorf("%s: failed to begin transaction: %w", op, err)
+	}
+	defer func(tx pgx.Tx, ctx context.Context) {
+		err := tx.Rollback(ctx)
+		if err != nil {
+			return
+		}
+	}(tx, ctx)
+
+	userQuery := `
 		INSERT INTO users(email, password_hash, name, phone, address)
 		VALUES ($1, $2, $3, $4, $5)
         RETURNING id, name, email, activated`
@@ -93,7 +109,7 @@ func (s *Storage) SaveUser(ctx context.Context, name string, phone string, addre
 	var resName, resEmail string
 	var activated bool
 
-	err := s.db.QueryRow(ctx, query, email, passwordHash, name, phone, address).Scan(&id, &resName, &resEmail, &activated)
+	err = tx.QueryRow(ctx, userQuery, email, passwordHash, name, phone, address).Scan(&id, &resName, &resEmail, &activated)
 
 	if err != nil {
 		var postgresErr *pgconn.PgError
@@ -101,6 +117,19 @@ func (s *Storage) SaveUser(ctx context.Context, name string, phone string, addre
 			return 0, "", "", false, fmt.Errorf("%s: %w", op, storage.ErrUserExists)
 		}
 		return 0, "", "", false, fmt.Errorf("%s: %w", op, err)
+	}
+
+	permQuery := `
+		INSERT INTO users_permissions(user_id, permission_id)
+		VALUES ($1, $2) ON CONFLICT DO NOTHING`
+
+	_, err = tx.Exec(ctx, permQuery, id, permissionID)
+	if err != nil {
+		return 0, "", "", false, fmt.Errorf("%s: failed to add permission: %w", op, err)
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return 0, "", "", false, fmt.Errorf("%s: failed to commit transaction: %w", op, err)
 	}
 
 	return id, resName, resEmail, activated, nil
@@ -346,4 +375,90 @@ func (s *Storage) AddUserPermission(ctx context.Context, userID int64, permissio
 
 func (s *Storage) GetUserPermissionsAsModels(ctx context.Context, userID int64) ([]models.Permission, error) {
 	return s.UserPermissions(ctx, userID)
+}
+
+func (s *Storage) SaveVerificationToken(ctx context.Context, token string, userID int64, expiresAt time.Time) error {
+	const op = "storage.postgres.SaveVerificationToken"
+
+	query := `
+		INSERT INTO email_verification_tokens (token, user_id, expires_at)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (user_id) DO UPDATE SET
+			token = EXCLUDED.token,
+			expires_at = EXCLUDED.expires_at,
+			created_at = now()`
+
+	_, err := s.db.Exec(ctx, query, token, userID, expiresAt)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (s *Storage) VerifyEmail(ctx context.Context, token string) (int64, error) {
+	const op = "storage.postgres.VerifyEmail"
+
+	// Начинаем транзакцию
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("%s: failed to begin transaction: %w", op, err)
+	}
+	defer func(tx pgx.Tx, ctx context.Context) {
+		err := tx.Rollback(ctx)
+		if err != nil {
+			return
+		}
+	}(tx, ctx)
+
+	// 1. Получаем пользователя по токену и проверяем срок действия
+	var userID int64
+	checkQuery := `
+		SELECT user_id FROM email_verification_tokens
+		WHERE token = $1 AND expires_at > now()`
+
+	err = tx.QueryRow(ctx, checkQuery, token).Scan(&userID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, fmt.Errorf("%s: %w", op, storage.ErrTokenNotFound)
+		}
+		return 0, fmt.Errorf("%s: failed to check token: %w", op, err)
+	}
+
+	updateQuery := `UPDATE users SET activated = true WHERE id = $1`
+	_, err = tx.Exec(ctx, updateQuery, userID)
+	if err != nil {
+		return 0, fmt.Errorf("%s: failed to activate user: %w", op, err)
+	}
+
+	deleteQuery := `DELETE FROM email_verification_tokens WHERE token = $1`
+	_, err = tx.Exec(ctx, deleteQuery, token)
+	if err != nil {
+		return 0, fmt.Errorf("%s: failed to delete token: %w", op, err)
+	}
+
+	// 4. Коммитим транзакцию
+	if err = tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("%s: failed to commit transaction: %w", op, err)
+	}
+
+	return userID, nil
+}
+
+func (s *Storage) GetVerificationTokenByUserID(ctx context.Context, userID int64) (string, time.Time, error) {
+	const op = "storage.postgres.GetVerificationTokenByUserID"
+
+	query := `SELECT token, expires_at FROM email_verification_tokens WHERE user_id = $1`
+
+	var token string
+	var expiresAt time.Time
+	err := s.db.QueryRow(ctx, query, userID).Scan(&token, &expiresAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", time.Time{}, fmt.Errorf("%s: %w", op, storage.ErrTokenNotFound)
+		}
+		return "", time.Time{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return token, expiresAt, nil
 }

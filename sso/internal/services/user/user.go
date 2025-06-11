@@ -17,7 +17,15 @@ var (
 type UserRepository interface {
 	UserByID(ctx context.Context, userID int64) (models.User, error)
 	UserByEmail(ctx context.Context, email string) (models.User, error)
-	SaveUser(ctx context.Context, name, phone, address, email string, passwordHash []byte) (int64, string, string, bool, error)
+	SaveUserWithPermission(
+		ctx context.Context,
+		name string,
+		phone string,
+		address string,
+		email string,
+		passwordHash []byte,
+		permissionID int64,
+	) (uid int64, resName string, resEmail string, activated bool, err error)
 }
 
 type UserProvider interface {

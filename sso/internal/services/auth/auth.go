@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"golang.org/x/crypto/bcrypt"
@@ -10,6 +12,7 @@ import (
 	"sso/internal/domain/models"
 	"sso/internal/lib/jwt"
 	"sso/internal/lib/logger/sl"
+	"sso/internal/lib/mailer"
 	"sso/internal/services"
 	"sso/internal/storage"
 	"sso/internal/validator"
@@ -21,15 +24,19 @@ var (
 )
 
 type UserSaver interface {
-	SaveUser(
+	SaveUserWithPermission(
 		ctx context.Context,
 		name string,
 		phone string,
 		address string,
 		email string,
 		passwordHash []byte,
+		permissionID int64,
 	) (uid int64, resName string, resEmail string, activated bool, err error)
-	AddUserPermission(ctx context.Context, userID int64, permissionID int64) error
+	//AddUserPermission(ctx context.Context, userID int64, permissionID int64) error
+	SaveVerificationToken(ctx context.Context, token string, userID int64, expiresAt time.Time) error
+	VerifyEmail(ctx context.Context, token string) (userID int64, err error)
+	GetVerificationTokenByUserID(ctx context.Context, userID int64) (string, time.Time, error)
 }
 
 type RefreshSaver interface {
@@ -59,6 +66,8 @@ type Auth struct {
 	usrProvider  UserProvider
 	appProvider  AppProvider
 	permProvider PermProvider
+	emailClient  *mailer.MailtrapClient
+	baseURL      string
 	tokenTTL     time.Duration
 	refreshTTL   time.Duration
 }
@@ -70,6 +79,8 @@ func New(
 	userProvider UserProvider,
 	appProvider AppProvider,
 	permProvider PermProvider,
+	emailClient *mailer.MailtrapClient,
+	baseURL string,
 	tokenTTL time.Duration,
 	refreshTTL time.Duration,
 ) *Auth {
@@ -80,6 +91,8 @@ func New(
 		usrProvider:  userProvider,
 		appProvider:  appProvider,
 		permProvider: permProvider,
+		emailClient:  emailClient,
+		baseURL:      baseURL,
 		tokenTTL:     tokenTTL,
 		refreshTTL:   refreshTTL,
 	}
@@ -126,20 +139,102 @@ func (a *Auth) RegisterNewUser(ctx context.Context,
 	}
 	
 	// saving user in DB
-	id, name, email, activated, err := a.usrSaver.SaveUser(ctx, name, phone, address, email, passwordHash)
+	id, name, email, activated, err := a.usrSaver.SaveUserWithPermission(ctx, name, phone, address, email, passwordHash, 1)
 	if err != nil {
-		log.Error("failed to save user", sl.Err(err))
+		log.Error("failed to save user with permission", sl.Err(err))
 		
 		return 0, "", "", false, fmt.Errorf("%s: %w", op, err)
 	}
 	
-	if err := a.usrSaver.AddUserPermission(ctx, id, 1); err != nil {
-		log.Error("failed to assign user permission", sl.Err(err))
-		
-		return 0, "", "", false, fmt.Errorf("%s: %w", op, err)
-	}
+	//if err := a.usrSaver.AddUserPermission(ctx, id, 1); err != nil {
+	//	log.Error("failed to assign user permission", sl.Err(err))
+	//
+	//	return 0, "", "", false, fmt.Errorf("%s: %w", op, err)
+	//}
+	
+	log.Info("user registered successfully", slog.Int64("userID", id))
 	
 	return id, name, email, activated, nil
+}
+
+func (a *Auth) generateVerificationToken() (string, error) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
+}
+
+func (a *Auth) SendVerificationEmail(ctx context.Context, userId int64, appID int32) (bool, string, int64, error) {
+	const op = "Auth.SendVerificationEmail"
+	
+	log := a.log.With(
+		slog.String("op", op),
+		slog.Int64("userID", userId),
+		slog.Int("appID", int(appID)),
+	)
+	
+	log.Info("sending verification email")
+	
+	user, err := a.usrProvider.UserByID(ctx, userId)
+	if err != nil {
+		log.Error("failed to get user", sl.Err(err))
+		return false, "User not found", 0, fmt.Errorf("%s: %w", op, err)
+	}
+	
+	if user.Activated {
+		log.Info("user already activated")
+		return false, "User already activated", 0, nil
+	}
+	
+	token, err := a.generateVerificationToken()
+	if err != nil {
+		log.Error("failed to generate verification token", sl.Err(err))
+		return false, "Failed to generate verification token", 0, fmt.Errorf("%s: %w", op, err)
+	}
+	
+	expiresAt := time.Now().Add(24 * time.Hour)
+	if err := a.usrSaver.SaveVerificationToken(ctx, token, userId, expiresAt); err != nil {
+		log.Error("failed to save verification token", sl.Err(err))
+		return false, "Failed to save verification token", 0, fmt.Errorf("%s: %w", op, err)
+	}
+	
+	if err := a.emailClient.SendVerificationEmail(ctx, user.Email, user.Name, token, a.baseURL); err != nil {
+		log.Error("failed to send verification email", sl.Err(err))
+		return false, "Failed to send verification email", 0, fmt.Errorf("%s: %w", op, err)
+	}
+	
+	log.Info("verification email sent successfully")
+	
+	return true, "Verification email sent successfully", expiresAt.Unix(), nil
+}
+
+func (a *Auth) EmailVerify(ctx context.Context, token string) (bool, string, bool, error) {
+	const op = "Auth.EmailVerify"
+	
+	log := a.log.With(
+		slog.String("op", op),
+	)
+	
+	log.Info("processing email verification")
+	
+	if token == "" {
+		return false, "Verification token is required", false, fmt.Errorf("%s: empty token", op)
+	}
+	
+	userID, err := a.usrSaver.VerifyEmail(ctx, token)
+	if err != nil {
+		if errors.Is(err, storage.ErrTokenNotFound) {
+			log.Warn("invalid or expired verification token")
+			return false, "Invalid or expired verification token", false, fmt.Errorf("%s: %w", op, err)
+		}
+		log.Error("failed to verify email", sl.Err(err))
+		return false, "Failed to verify email", false, fmt.Errorf("%s: %w", op, err)
+	}
+	
+	log.Info("email verified successfully", slog.Int64("userID", userID))
+	
+	return true, "Email verified successfully", true, nil
 }
 
 func (a *Auth) Login(
@@ -365,38 +460,4 @@ func (a *Auth) ResetPassword(ctx context.Context, token string, password string)
 	log.Warn("reset password not implemented yet")
 	
 	return false, "Reset password functionality is not implemented yet", fmt.Errorf("%s: not implemented", op)
-}
-
-func (a *Auth) SendVerificationEmail(ctx context.Context, userId int64, appID int32) (bool, string, int64, error) {
-	const op = "Auth.SendVerificationEmail"
-	
-	log := a.log.With(
-		slog.String("op", op),
-		slog.Int64("userID", userId),
-		slog.Int("appID", int(appID)),
-	)
-	
-	log.Info("processing send verification email request")
-	
-	// TODO: Implement email verification logic
-	// For now, return not implemented
-	log.Warn("send verification email not implemented yet")
-	
-	return false, "Email verification functionality is not implemented yet", 0, fmt.Errorf("%s: not implemented", op)
-}
-
-func (a *Auth) EmailVerify(ctx context.Context, token string) (bool, string, bool, error) {
-	const op = "Auth.EmailVerify"
-	
-	log := a.log.With(
-		slog.String("op", op),
-	)
-	
-	log.Info("processing email verification request")
-	
-	// TODO: Implement email verification logic
-	// For now, return not implemented
-	log.Warn("email verify not implemented yet")
-	
-	return false, "Email verification functionality is not implemented yet", false, fmt.Errorf("%s: not implemented", op)
 }
