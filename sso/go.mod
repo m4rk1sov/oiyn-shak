@@ -10,7 +10,7 @@ require (
 	github.com/ilyakaznacheev/cleanenv v1.5.0
 	github.com/jackc/pgx/v5 v5.7.5
 	github.com/joho/godotenv v1.5.1
-	github.com/m4rk1sov/protos v0.2.2
+	github.com/m4rk1sov/protos v0.2.3
 	github.com/stretchr/testify v1.10.0
 	golang.org/x/crypto v0.39.0
 	google.golang.org/grpc v1.73.0

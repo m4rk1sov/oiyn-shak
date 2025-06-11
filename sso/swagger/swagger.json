@@ -228,7 +228,7 @@
       }
     },
     "/v1/auth/user": {
-      "get": {
+      "post": {
         "summary": "Get user info",
         "description": "Get user info: user_id, name, phone, email, address. Based on the access token",
         "operationId": "Auth_GetUserInfo",
@@ -248,10 +248,12 @@
         },
         "parameters": [
           {
-            "name": "accessToken",
-            "in": "query",
-            "required": false,
-            "type": "string"
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/authGetUserInfoRequest"
+            }
           }
         ],
         "tags": [
@@ -259,8 +261,8 @@
         ]
       }
     },
-    "/v1/auth/verification/confirm": {
-      "post": {
+    "/v1/auth/verification/confirm/{token}": {
+      "get": {
         "summary": "Email verification confirmation",
         "description": "Email will be verified after the token is confirmed",
         "operationId": "Auth_EmailVerify",
@@ -280,12 +282,10 @@
         },
         "parameters": [
           {
-            "name": "body",
-            "in": "body",
+            "name": "token",
+            "in": "path",
             "required": true,
-            "schema": {
-              "$ref": "#/definitions/authEmailVerifyRequest"
-            }
+            "type": "string"
           }
         ],
         "tags": [
@@ -401,14 +401,6 @@
     }
   },
   "definitions": {
-    "authEmailVerifyRequest": {
-      "type": "object",
-      "properties": {
-        "token": {
-          "type": "string"
-        }
-      }
-    },
     "authEmailVerifyResponse": {
       "type": "object",
       "properties": {
@@ -447,6 +439,14 @@
         "expiresAtUnix": {
           "type": "string",
           "format": "int64"
+        }
+      }
+    },
+    "authGetUserInfoRequest": {
+      "type": "object",
+      "properties": {
+        "accessToken": {
+          "type": "string"
         }
       }
     },

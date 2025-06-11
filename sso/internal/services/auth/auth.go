@@ -37,6 +37,12 @@ type UserSaver interface {
 	SaveVerificationToken(ctx context.Context, token string, userID int64, expiresAt time.Time) error
 	VerifyEmail(ctx context.Context, token string) (userID int64, err error)
 	GetVerificationTokenByUserID(ctx context.Context, userID int64) (string, time.Time, error)
+	
+	SaveResetToken(ctx context.Context, token string, userID int64, expiresAt time.Time) error
+	ValidateResetToken(ctx context.Context, token string) (userID int64, err error)
+	//GetUserByResetToken(ctx context.Context, token string) (int64, error)
+	UpdateUserPassword(ctx context.Context, userID int64, passwordHash []byte) error
+	DeleteResetToken(ctx context.Context, token string) error
 }
 
 type RefreshSaver interface {
@@ -66,7 +72,7 @@ type Auth struct {
 	usrProvider  UserProvider
 	appProvider  AppProvider
 	permProvider PermProvider
-	emailClient  *mailer.MailtrapClient
+	emailClient  *mailer.Mailer
 	baseURL      string
 	tokenTTL     time.Duration
 	refreshTTL   time.Duration
@@ -79,7 +85,7 @@ func New(
 	userProvider UserProvider,
 	appProvider AppProvider,
 	permProvider PermProvider,
-	emailClient *mailer.MailtrapClient,
+	emailClient *mailer.Mailer,
 	baseURL string,
 	tokenTTL time.Duration,
 	refreshTTL time.Duration,
@@ -198,6 +204,12 @@ func (a *Auth) SendVerificationEmail(ctx context.Context, userId int64, appID in
 		log.Error("failed to save verification token", sl.Err(err))
 		return false, "Failed to save verification token", 0, fmt.Errorf("%s: %w", op, err)
 	}
+	
+	log.Info("attempting to send email",
+		slog.String("toEmail", user.Email),
+		slog.String("toName", user.Name),
+		slog.String("baseURL", a.baseURL),
+	)
 	
 	if err := a.emailClient.SendVerificationEmail(ctx, user.Email, user.Name, token, a.baseURL); err != nil {
 		log.Error("failed to send verification email", sl.Err(err))
@@ -428,6 +440,14 @@ func (a *Auth) GetAppSecret(ctx context.Context, appID int32) (string, error) {
 	return app.Secret, nil
 }
 
+func (a *Auth) generateResetToken() (string, error) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
+}
+
 func (a *Auth) ForgotPassword(ctx context.Context, email string, appID int32) (bool, string, int64, error) {
 	const op = "Auth.ForgotPassword"
 	
@@ -439,25 +459,105 @@ func (a *Auth) ForgotPassword(ctx context.Context, email string, appID int32) (b
 	
 	log.Info("processing forgot password request")
 	
-	// TODO: Implement forgot password logic
-	// For now, return not implemented
-	log.Warn("forgot password not implemented yet")
+	// Проверяем существование пользователя
+	user, err := a.usrProvider.UserByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, storage.ErrUserNotFound) {
+			log.Warn("user not found for password reset")
+			// Возвращаем успех для безопасности (не раскрываем существование email)
+			return true, "If this email is registered, you will receive a reset link", 0, nil
+		}
+		log.Error("failed to get user", sl.Err(err))
+		return false, "Failed to process request", 0, fmt.Errorf("%s: %w", op, err)
+	}
 	
-	return false, "Forgot password functionality is not implemented yet", 0, fmt.Errorf("%s: not implemented", op)
+	// Генерируем токен сброса
+	resetToken, err := a.generateResetToken()
+	if err != nil {
+		log.Error("failed to generate reset token", sl.Err(err))
+		return false, "Failed to generate reset token", 0, fmt.Errorf("%s: %w", op, err)
+	}
+	
+	// Токен действует 1 час
+	expiresAt := time.Now().Add(1 * time.Hour)
+	if err := a.usrSaver.SaveResetToken(ctx, resetToken, user.ID, expiresAt); err != nil {
+		log.Error("failed to save reset token", sl.Err(err))
+		return false, "Failed to save reset token", 0, fmt.Errorf("%s: %w", op, err)
+	}
+	
+	log.Info("attempting to send password reset email",
+		slog.String("toEmail", user.Email),
+		slog.String("toName", user.Name),
+		slog.String("baseURL", a.baseURL),
+	)
+	
+	// Отправляем email
+	if err := a.emailClient.SendResetPasswordEmail(ctx, user.Email, user.Name, resetToken, a.baseURL); err != nil {
+		log.Error("failed to send password reset email", sl.Err(err))
+		return false, "Failed to send reset email", 0, fmt.Errorf("%s: %w", op, err)
+	}
+	
+	log.Info("password reset email sent successfully")
+	
+	return true, "Password reset email sent successfully", expiresAt.Unix(), nil
 }
 
-func (a *Auth) ResetPassword(ctx context.Context, token string, password string) (bool, string, error) {
+func (a *Auth) ResetPassword(ctx context.Context, token string, newPassword string) (bool, string, error) {
 	const op = "Auth.ResetPassword"
 	
 	log := a.log.With(
 		slog.String("op", op),
 	)
 	
-	log.Info("processing reset password request")
+	log.Info("processing password reset request")
 	
-	// TODO: Implement reset password logic
-	// For now, return not implemented
-	log.Warn("reset password not implemented yet")
+	if token == "" {
+		return false, "Reset token is required", fmt.Errorf("%s: empty token", op)
+	}
 	
-	return false, "Reset password functionality is not implemented yet", fmt.Errorf("%s: not implemented", op)
+	if newPassword == "" {
+		return false, "New password is required", fmt.Errorf("%s: empty password", op)
+	}
+	
+	// Валидируем новый пароль
+	v := validator.New()
+	validator.ValidateUserPassword(v, newPassword)
+	if !v.Valid() {
+		log.Error("invalid new password", slog.Any("errors", v.Errors))
+		return false, "Invalid password format", fmt.Errorf("%s: validation error", op)
+	}
+	
+	// Получаем пользователя по токену сброса
+	userID, err := a.usrSaver.ValidateResetToken(ctx, token)
+	if err != nil {
+		if errors.Is(err, storage.ErrTokenNotFound) {
+			log.Warn("invalid or expired reset token")
+			return false, "Invalid or expired reset token", fmt.Errorf("%s: %w", op, err)
+		}
+		log.Error("failed to get user by reset token", sl.Err(err))
+		return false, "Failed to process reset request", fmt.Errorf("%s: %w", op, err)
+	}
+	
+	// Хешируем новый пароль
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), 14)
+	if err != nil {
+		log.Error("failed to generate password hash", sl.Err(err))
+		return false, "Failed to process new password", fmt.Errorf("%s: %w", op, err)
+	}
+	
+	// Обновляем пароль пользователя
+	if err := a.usrSaver.UpdateUserPassword(ctx, userID, passwordHash); err != nil {
+		log.Error("failed to update user password", sl.Err(err))
+		return false, "Failed to update password", fmt.Errorf("%s: %w", op, err)
+	}
+	
+	// Удаляем использованный токен
+	if err := a.usrSaver.DeleteResetToken(ctx, token); err != nil {
+		log.Warn("failed to delete reset token", sl.Err(err))
+		// Не возвращаем ошибку, т.к. пароль уже обновлен
+	}
+	
+	log.Info("password reset successfully", slog.Int64("userID", userID))
+	
+	return true, "Password reset successfully", nil
 }

@@ -32,8 +32,17 @@ func main() {
 	// Initialize logger
 	log := setupLogger(cfg.Env)
 
+	smtpConfig := app.SMTPConfig{
+		Host:     os.Getenv("SMTP_HOST"),
+		Port:     os.Getenv("SMTP_PORT"),
+		Username: os.Getenv("SMTP_USERNAME"),
+		Password: os.Getenv("SMTP_PASSWORD"),
+		From:     os.Getenv("SMTP_FROM"),
+		FromName: os.Getenv("SMTP_FROM_NAME"),
+	}
+
 	// Initialize app
-	application := app.New(log, cfg.GRPC.Port, cfg.HTTPServer.Port, cfg.DSN, cfg.Mailtrap.APIToken, cfg.BaseURL, cfg.JWT.TokenTTL, cfg.JWT.RefreshTTL)
+	application := app.New(log, cfg.GRPC.Port, cfg.HTTPServer.Port, cfg.DSN, smtpConfig, cfg.BaseURL, cfg.JWT.TokenTTL, cfg.JWT.RefreshTTL)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

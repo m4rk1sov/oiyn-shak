@@ -25,12 +25,22 @@ type App struct {
 	log        *slog.Logger
 }
 
+type SMTPConfig struct {
+	Host     string
+	Port     string
+	Username string
+	Password string
+	From     string
+	FromName string
+}
+
 func New(
 	log *slog.Logger,
 	grpcPort int,
 	httpPort int,
 	dsn string,
-	mailtrapAPIToken string,
+	//mailtrapAPIToken string,
+	smtpConfig SMTPConfig,
 	baseURL string,
 	tokenTTL time.Duration,
 	refreshTTL time.Duration,
@@ -40,7 +50,15 @@ func New(
 		panic(err)
 	}
 
-	emailClient := mailer.NewMailtrapClient(mailtrapAPIToken)
+	//emailClient := mailer.NewMailtrapClient(mailtrapAPIToken)
+	emailClient := mailer.New(
+		smtpConfig.Host,
+		smtpConfig.Port,
+		smtpConfig.Username,
+		smtpConfig.Password,
+		smtpConfig.From,
+		smtpConfig.FromName,
+	)
 	permissionService := permission.New(log, storage, storage)
 	authService := auth.New(
 		log,

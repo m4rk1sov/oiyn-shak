@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"log/slog"
@@ -21,10 +22,10 @@ type Storage struct {
 	db *pgxpool.Pool
 }
 
-func (s *Storage) SaveUser(ctx context.Context, name, phone, address, email string, passwordHash []byte) (int64, string, string, bool, error) {
-	//TODO implement me
-	panic("implement me")
-}
+//func (s *Storage) SaveUser(ctx context.Context, name, phone, address, email string, passwordHash []byte) (int64, string, string, bool, error) {
+//	//TODO implement me
+//	panic("implement me")
+//}
 
 func Config(dsn string) *pgxpool.Config {
 	const defaultMaxConns = int32(50)
@@ -461,4 +462,132 @@ func (s *Storage) GetVerificationTokenByUserID(ctx context.Context, userID int64
 	}
 
 	return token, expiresAt, nil
+}
+
+// SaveResetToken сохраняет токен для сброса пароля
+func (s *Storage) SaveResetToken(ctx context.Context, token string, userID int64, expiresAt time.Time) error {
+	const op = "storage.postgres.SaveResetToken"
+
+	// Сначала удаляем старые токены для этого пользователя
+	_, err := s.db.Exec(ctx, `
+		DELETE FROM password_reset_tokens
+		WHERE user_id = $1 OR expires_at < NOW()
+	`, userID)
+	if err != nil {
+		return fmt.Errorf("%s: failed to delete old tokens: %w", op, err)
+	}
+
+	// Сохраняем новый токен
+	_, err = s.db.Exec(ctx, `
+		INSERT INTO password_reset_tokens (token, user_id, expires_at)
+		VALUES ($1, $2, $3)
+	`, token, userID, expiresAt)
+	if err != nil {
+		return fmt.Errorf("%s: failed to save reset token: %w", op, err)
+	}
+
+	return nil
+}
+
+// ValidateResetToken проверяет токен сброса пароля и возвращает userID
+func (s *Storage) ValidateResetToken(ctx context.Context, token string) (int64, error) {
+	const op = "storage.postgres.ValidateResetToken"
+
+	var userID int64
+	var expiresAt time.Time
+
+	err := s.db.QueryRow(ctx, `
+		SELECT user_id, expires_at
+		FROM password_reset_tokens
+		WHERE token = $1
+	`, token).Scan(&userID, &expiresAt)
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, fmt.Errorf("%s: %w", op, storage.ErrTokenNotFound)
+		}
+		return 0, fmt.Errorf("%s: failed to get reset token: %w", op, err)
+	}
+
+	// Проверяем, не истек ли токен
+	if time.Now().After(expiresAt) {
+		// Удаляем истекший токен
+		_, _ = s.db.Exec(ctx, `DELETE FROM password_reset_tokens WHERE token = $1`, token)
+		return 0, fmt.Errorf("%s: %w", op, storage.ErrTokenNotFound)
+	}
+
+	return userID, nil
+}
+
+// UpdateUserPassword обновляет пароль пользователя
+func (s *Storage) UpdateUserPassword(ctx context.Context, userID int64, passwordHash []byte) error {
+	const op = "storage.postgres.UpdatePassword"
+
+	result, err := s.db.Exec(ctx, `
+		UPDATE users
+		SET password_hash = $1
+		WHERE id = $2
+	`, passwordHash, userID)
+
+	if err != nil {
+		return fmt.Errorf("%s: failed to update password: %w", op, err)
+	}
+
+	rowsAffected := result.RowsAffected()
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("%s: %w", op, storage.ErrUserNotFound)
+	}
+
+	return nil
+}
+
+// CleanupExpiredTokens удаляет истекшие токены (можно вызывать по cron)
+func (s *Storage) CleanupExpiredTokens(ctx context.Context) error {
+	const op = "storage.postgres.CleanupExpiredTokens"
+
+	// Удаляем истекшие токены верификации
+	_, err1 := s.db.Exec(ctx, `
+		DELETE FROM email_verification_tokens
+		WHERE expires_at < NOW()
+	`)
+
+	// Удаляем истекшие токены сброса пароля
+	_, err2 := s.db.Exec(ctx, `
+		DELETE FROM password_reset_tokens
+		WHERE expires_at < NOW()
+	`)
+
+	if err1 != nil {
+		return fmt.Errorf("%s: failed to cleanup verification tokens: %w", op, err1)
+	}
+	if err2 != nil {
+		return fmt.Errorf("%s: failed to cleanup reset tokens: %w", op, err2)
+	}
+
+	return nil
+}
+
+// DeleteResetToken удаляет токен сброса пароля после использования
+func (s *Storage) DeleteResetToken(ctx context.Context, token string) error {
+	const op = "storage.postgres.DeleteResetToken"
+
+	result, err := s.db.Exec(ctx, `
+		DELETE FROM password_reset_tokens
+		WHERE token = $1
+	`, token)
+
+	if err != nil {
+		return fmt.Errorf("%s: failed to delete reset token: %w", op, err)
+	}
+
+	rowsAffected := result.RowsAffected()
+
+	// Не возвращаем ошибку если токен не найден - возможно уже удален
+	if rowsAffected == 0 {
+		// Можно логировать это как предупреждение
+		return nil
+	}
+
+	return nil
 }
